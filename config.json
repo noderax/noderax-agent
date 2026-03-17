@@ -1,6 +1,6 @@
 {
   "api_url": "http://api.noderax-api.orb.local:3000",
-  "enrollment_token": "replace-me-for-bootstrap",
+  "enrollment_token": "change-me-agent-enrollment-token",
   "node_id": "",
   "agent_token": "",
   "heartbeat_interval": "30s",
