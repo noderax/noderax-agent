@@ -9,6 +9,8 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
+const apiV1Prefix = "/api/v1"
+
 type Client struct {
 	http *resty.Client
 }
@@ -42,23 +44,23 @@ func (c *Client) SetAgentToken(token string) {
 
 func (c *Client) Register(ctx context.Context, request RegisterRequest) (RegisterResponse, error) {
 	var response RegisterResponse
-	if err := c.post(ctx, "/v1/agent/register", request, &response); err != nil {
+	if err := c.post(ctx, apiPath("/agent/register"), request, &response); err != nil {
 		return RegisterResponse{}, err
 	}
 	return response, nil
 }
 
 func (c *Client) Heartbeat(ctx context.Context, request HeartbeatRequest) error {
-	return c.post(ctx, "/v1/agent/heartbeat", request, nil)
+	return c.post(ctx, apiPath("/agent/heartbeat"), request, nil)
 }
 
 func (c *Client) SendMetrics(ctx context.Context, request MetricsRequest) error {
-	return c.post(ctx, "/v1/agent/metrics", request, nil)
+	return c.post(ctx, apiPath("/agent/metrics"), request, nil)
 }
 
 func (c *Client) PullTasks(ctx context.Context, request PullTasksRequest) (PullTasksResponse, error) {
 	var response PullTasksResponse
-	if err := c.post(ctx, "/v1/agent/tasks/pull", request, &response); err != nil {
+	if err := c.post(ctx, apiPath("/agent/tasks/pull"), request, &response); err != nil {
 		return PullTasksResponse{}, err
 	}
 	if response.Tasks == nil {
@@ -68,18 +70,18 @@ func (c *Client) PullTasks(ctx context.Context, request PullTasksRequest) (PullT
 }
 
 func (c *Client) StartTask(ctx context.Context, request StartTaskRequest) error {
-	return c.post(ctx, fmt.Sprintf("/v1/agent/tasks/%s/start", request.TaskID), request, nil)
+	return c.post(ctx, apiPath(fmt.Sprintf("/agent/tasks/%s/start", request.TaskID)), request, nil)
 }
 
 func (c *Client) SendTaskLogs(ctx context.Context, request SendTaskLogsRequest) error {
 	if len(request.Entries) == 0 {
 		return nil
 	}
-	return c.post(ctx, fmt.Sprintf("/v1/agent/tasks/%s/logs", request.TaskID), request, nil)
+	return c.post(ctx, apiPath(fmt.Sprintf("/agent/tasks/%s/logs", request.TaskID)), request, nil)
 }
 
 func (c *Client) CompleteTask(ctx context.Context, request CompleteTaskRequest) error {
-	return c.post(ctx, fmt.Sprintf("/v1/agent/tasks/%s/complete", request.TaskID), request, nil)
+	return c.post(ctx, apiPath(fmt.Sprintf("/agent/tasks/%s/complete", request.TaskID)), request, nil)
 }
 
 func (c *Client) post(ctx context.Context, path string, request any, result any) error {
@@ -103,4 +105,8 @@ func (c *Client) post(ctx context.Context, path string, request any, result any)
 	}
 
 	return nil
+}
+
+func apiPath(path string) string {
+	return apiV1Prefix + path
 }

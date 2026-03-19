@@ -18,7 +18,19 @@ import (
 	"github.com/noderax/noderax-agent/internal/api"
 )
 
-var ErrUnsupportedTaskType = errors.New("unsupported task type")
+const (
+	TaskTypeShellExec      = "shell.exec"
+	TaskTypePackageList    = "packageList"
+	TaskTypePackageSearch  = "packageSearch"
+	TaskTypePackageInstall = "packageInstall"
+	TaskTypePackageRemove  = "packageRemove"
+)
+
+var (
+	ErrUnsupportedTaskType             = errors.New("unsupported task type")
+	ErrInvalidTaskPayload              = errors.New("invalid task payload")
+	ErrUnsupportedExecutionEnvironment = errors.New("unsupported execution environment")
+)
 
 type ShellExecPayload struct {
 	Command        string            `json:"command"`
@@ -29,6 +41,16 @@ type ShellExecPayload struct {
 	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
 }
 
+type packageSearchPayload struct {
+	Query string `json:"query"`
+}
+
+type packageMutationPayload struct {
+	Package  string   `json:"package,omitempty"`
+	Packages []string `json:"packages,omitempty"`
+	Purge    bool     `json:"purge,omitempty"`
+}
+
 type ExecutionResult struct {
 	ExitCode    int
 	StartedAt   time.Time
@@ -36,12 +58,69 @@ type ExecutionResult struct {
 	Duration    time.Duration
 }
 
+type commandSpec struct {
+	name         string
+	args         []string
+	env          map[string]string
+	dir          string
+	startMessage string
+}
+
+type commandRunner interface {
+	SetEnv([]string)
+	SetDir(string)
+	StdoutPipe() (io.ReadCloser, error)
+	StderrPipe() (io.ReadCloser, error)
+	Start() error
+	Wait() error
+}
+
+type execCommandRunner struct {
+	cmd *exec.Cmd
+}
+
+func newExecCommandRunner(ctx context.Context, name string, args ...string) commandRunner {
+	return &execCommandRunner{cmd: exec.CommandContext(ctx, name, args...)}
+}
+
+func (r *execCommandRunner) SetEnv(env []string) {
+	r.cmd.Env = env
+}
+
+func (r *execCommandRunner) SetDir(dir string) {
+	r.cmd.Dir = dir
+}
+
+func (r *execCommandRunner) StdoutPipe() (io.ReadCloser, error) {
+	return r.cmd.StdoutPipe()
+}
+
+func (r *execCommandRunner) StderrPipe() (io.ReadCloser, error) {
+	return r.cmd.StderrPipe()
+}
+
+func (r *execCommandRunner) Start() error {
+	return r.cmd.Start()
+}
+
+func (r *execCommandRunner) Wait() error {
+	return r.cmd.Wait()
+}
+
 type ShellExecutor struct {
 	defaultTimeout time.Duration
+	goos           string
+	lookPath       func(string) (string, error)
+	newCommand     func(context.Context, string, ...string) commandRunner
 }
 
 func NewShellExecutor(defaultTimeout time.Duration) *ShellExecutor {
-	return &ShellExecutor{defaultTimeout: defaultTimeout}
+	return &ShellExecutor{
+		defaultTimeout: defaultTimeout,
+		goos:           runtime.GOOS,
+		lookPath:       exec.LookPath,
+		newCommand:     newExecCommandRunner,
+	}
 }
 
 func (e *ShellExecutor) TimeoutFor(task api.Task) time.Duration {
@@ -49,7 +128,7 @@ func (e *ShellExecutor) TimeoutFor(task api.Task) time.Duration {
 		return time.Duration(task.TimeoutSeconds) * time.Second
 	}
 
-	if task.Type != "shell.exec" {
+	if task.Type != TaskTypeShellExec {
 		return e.defaultTimeout
 	}
 
@@ -71,38 +150,39 @@ func (e *ShellExecutor) TimeoutFor(task api.Task) time.Duration {
 }
 
 func (e *ShellExecutor) Execute(ctx context.Context, task api.Task, onLog func(string, string)) (ExecutionResult, error) {
-	if task.Type != "shell.exec" {
-		return ExecutionResult{ExitCode: -1}, fmt.Errorf("%w: %s", ErrUnsupportedTaskType, task.Type)
-	}
-
-	payload, err := decodeShellPayload(task.Payload)
+	spec, err := e.commandForTask(task)
 	if err != nil {
+		emitLog(onLog, "system", err.Error())
 		return ExecutionResult{ExitCode: -1}, err
 	}
-	if strings.TrimSpace(payload.Command) == "" {
-		return ExecutionResult{ExitCode: -1}, fmt.Errorf("shell.exec payload requires a command")
-	}
 
-	commandName, args := buildCommand(payload)
-	cmd := exec.CommandContext(ctx, commandName, args...)
-	cmd.Env = mergeEnvironment(payload.Environment)
-	if payload.WorkingDir != "" {
-		cmd.Dir = payload.WorkingDir
+	cmd := e.newCommand(ctx, spec.name, spec.args...)
+	cmd.SetEnv(mergeEnvironment(spec.env))
+	if spec.dir != "" {
+		cmd.SetDir(spec.dir)
 	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return ExecutionResult{ExitCode: -1}, fmt.Errorf("prepare stdout pipe: %w", err)
+		err = fmt.Errorf("prepare stdout pipe: %w", err)
+		emitLog(onLog, "system", err.Error())
+		return ExecutionResult{ExitCode: -1}, err
 	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return ExecutionResult{ExitCode: -1}, fmt.Errorf("prepare stderr pipe: %w", err)
+		err = fmt.Errorf("prepare stderr pipe: %w", err)
+		emitLog(onLog, "system", err.Error())
+		return ExecutionResult{ExitCode: -1}, err
 	}
+
+	emitLog(onLog, "system", spec.startMessage)
 
 	startedAt := time.Now().UTC()
 	if err := cmd.Start(); err != nil {
-		return ExecutionResult{ExitCode: -1}, fmt.Errorf("start command: %w", err)
+		err = fmt.Errorf("start command: %w", err)
+		emitLog(onLog, "system", err.Error())
+		return ExecutionResult{ExitCode: -1}, err
 	}
 
 	var scanWG sync.WaitGroup
@@ -121,6 +201,8 @@ func (e *ShellExecutor) Execute(ctx context.Context, task api.Task, onLog func(s
 		Duration:    completedAt.Sub(startedAt),
 	}
 
+	emitLog(onLog, "system", fmt.Sprintf("command finished with exit code %d", result.ExitCode))
+
 	if waitErr != nil {
 		if ctx.Err() != nil {
 			return result, ctx.Err()
@@ -131,19 +213,236 @@ func (e *ShellExecutor) Execute(ctx context.Context, task api.Task, onLog func(s
 	return result, nil
 }
 
+func (e *ShellExecutor) commandForTask(task api.Task) (commandSpec, error) {
+	switch task.Type {
+	case TaskTypeShellExec:
+		return e.shellCommand(task.Payload)
+	case TaskTypePackageList:
+		return e.packageListCommand()
+	case TaskTypePackageSearch:
+		return e.packageSearchCommand(task.Payload)
+	case TaskTypePackageInstall:
+		return e.packageInstallCommand(task.Payload)
+	case TaskTypePackageRemove:
+		return e.packageRemoveCommand(task.Payload)
+	default:
+		return commandSpec{}, fmt.Errorf("%w: %s", ErrUnsupportedTaskType, task.Type)
+	}
+}
+
+func (e *ShellExecutor) shellCommand(payload json.RawMessage) (commandSpec, error) {
+	parsed, err := decodeShellPayload(payload)
+	if err != nil {
+		return commandSpec{}, err
+	}
+	if strings.TrimSpace(parsed.Command) == "" {
+		return commandSpec{}, fmt.Errorf("%w: shell.exec payload requires a command", ErrInvalidTaskPayload)
+	}
+
+	commandName, args := buildShellCommand(e.goos, parsed)
+	return commandSpec{
+		name:         commandName,
+		args:         args,
+		env:          parsed.Environment,
+		dir:          parsed.WorkingDir,
+		startMessage: fmt.Sprintf("running shell.exec command via %s", commandName),
+	}, nil
+}
+
+func (e *ShellExecutor) packageListCommand() (commandSpec, error) {
+	if err := e.ensureLinuxTaskSupport(); err != nil {
+		return commandSpec{}, err
+	}
+
+	if dpkgPath, err := e.lookPath("dpkg"); err == nil {
+		args := []string{"-l"}
+		return commandSpec{
+			name:         dpkgPath,
+			args:         args,
+			startMessage: fmt.Sprintf("running %s", formatCommandForLog(dpkgPath, args)),
+		}, nil
+	}
+
+	aptPath, err := e.requireBinary("apt")
+	if err != nil {
+		return commandSpec{}, err
+	}
+
+	args := []string{"list", "--installed"}
+	return commandSpec{
+		name:         aptPath,
+		args:         args,
+		startMessage: fmt.Sprintf("running %s", formatCommandForLog(aptPath, args)),
+	}, nil
+}
+
+func (e *ShellExecutor) packageSearchCommand(payload json.RawMessage) (commandSpec, error) {
+	if err := e.ensureLinuxTaskSupport(); err != nil {
+		return commandSpec{}, err
+	}
+
+	var parsed packageSearchPayload
+	if err := decodePayload(payload, &parsed, TaskTypePackageSearch); err != nil {
+		return commandSpec{}, err
+	}
+
+	query := strings.TrimSpace(parsed.Query)
+	terms := strings.Fields(query)
+	if len(terms) == 0 {
+		return commandSpec{}, fmt.Errorf("%w: packageSearch payload requires a non-empty query", ErrInvalidTaskPayload)
+	}
+	for _, term := range terms {
+		if strings.HasPrefix(term, "-") {
+			return commandSpec{}, fmt.Errorf("%w: packageSearch query term %q must not start with '-'", ErrInvalidTaskPayload, term)
+		}
+	}
+
+	aptPath, err := e.requireBinary("apt")
+	if err != nil {
+		return commandSpec{}, err
+	}
+
+	args := append([]string{"search"}, terms...)
+	return commandSpec{
+		name:         aptPath,
+		args:         args,
+		startMessage: fmt.Sprintf("running %s", formatCommandForLog(aptPath, args)),
+	}, nil
+}
+
+func (e *ShellExecutor) packageInstallCommand(payload json.RawMessage) (commandSpec, error) {
+	if err := e.ensureLinuxTaskSupport(); err != nil {
+		return commandSpec{}, err
+	}
+
+	aptGetPath, err := e.requireBinary("apt-get")
+	if err != nil {
+		return commandSpec{}, err
+	}
+
+	packages, err := decodePackageNames(payload)
+	if err != nil {
+		return commandSpec{}, err
+	}
+
+	args := append([]string{"install", "-y", "--"}, packages...)
+	return commandSpec{
+		name:         aptGetPath,
+		args:         args,
+		env:          map[string]string{"DEBIAN_FRONTEND": "noninteractive"},
+		startMessage: fmt.Sprintf("running %s", formatCommandForLog(aptGetPath, args)),
+	}, nil
+}
+
+func (e *ShellExecutor) packageRemoveCommand(payload json.RawMessage) (commandSpec, error) {
+	if err := e.ensureLinuxTaskSupport(); err != nil {
+		return commandSpec{}, err
+	}
+
+	aptGetPath, err := e.requireBinary("apt-get")
+	if err != nil {
+		return commandSpec{}, err
+	}
+
+	var parsed packageMutationPayload
+	if err := decodePayload(payload, &parsed, TaskTypePackageRemove); err != nil {
+		return commandSpec{}, err
+	}
+
+	packages, err := normalizePackageNames(parsed)
+	if err != nil {
+		return commandSpec{}, err
+	}
+
+	action := "remove"
+	if parsed.Purge {
+		action = "purge"
+	}
+
+	args := append([]string{action, "-y", "--"}, packages...)
+	return commandSpec{
+		name:         aptGetPath,
+		args:         args,
+		env:          map[string]string{"DEBIAN_FRONTEND": "noninteractive"},
+		startMessage: fmt.Sprintf("running %s", formatCommandForLog(aptGetPath, args)),
+	}, nil
+}
+
+func (e *ShellExecutor) ensureLinuxTaskSupport() error {
+	if e.goos != "linux" {
+		return fmt.Errorf("%w: package tasks require linux, got %s", ErrUnsupportedExecutionEnvironment, e.goos)
+	}
+
+	return nil
+}
+
+func (e *ShellExecutor) requireBinary(name string) (string, error) {
+	path, err := e.lookPath(name)
+	if err != nil {
+		return "", fmt.Errorf("%w: required binary %q is not available", ErrUnsupportedExecutionEnvironment, name)
+	}
+	return path, nil
+}
+
 func decodeShellPayload(payload json.RawMessage) (ShellExecPayload, error) {
 	var parsed ShellExecPayload
 	if len(payload) == 0 {
-		return ShellExecPayload{}, fmt.Errorf("missing task payload")
+		return ShellExecPayload{}, fmt.Errorf("%w: missing shell.exec payload", ErrInvalidTaskPayload)
 	}
 	if err := json.Unmarshal(payload, &parsed); err != nil {
-		return ShellExecPayload{}, fmt.Errorf("decode shell.exec payload: %w", err)
+		return ShellExecPayload{}, fmt.Errorf("%w: decode shell.exec payload: %v", ErrInvalidTaskPayload, err)
 	}
 	return parsed, nil
 }
 
-func buildCommand(payload ShellExecPayload) (string, []string) {
-	if runtime.GOOS == "windows" {
+func decodePayload(payload json.RawMessage, target any, taskType string) error {
+	if len(payload) == 0 {
+		return fmt.Errorf("%w: missing %s payload", ErrInvalidTaskPayload, taskType)
+	}
+	if err := json.Unmarshal(payload, target); err != nil {
+		return fmt.Errorf("%w: decode %s payload: %v", ErrInvalidTaskPayload, taskType, err)
+	}
+	return nil
+}
+
+func decodePackageNames(payload json.RawMessage) ([]string, error) {
+	var parsed packageMutationPayload
+	if err := decodePayload(payload, &parsed, TaskTypePackageInstall); err != nil {
+		return nil, err
+	}
+
+	return normalizePackageNames(parsed)
+}
+
+func normalizePackageNames(payload packageMutationPayload) ([]string, error) {
+	rawNames := make([]string, 0, len(payload.Packages)+1)
+	if payload.Package != "" {
+		rawNames = append(rawNames, payload.Package)
+	}
+	rawNames = append(rawNames, payload.Packages...)
+
+	packages := make([]string, 0, len(rawNames))
+	for _, raw := range rawNames {
+		name := strings.TrimSpace(raw)
+		switch {
+		case name == "":
+			return nil, fmt.Errorf("%w: package names must not be empty", ErrInvalidTaskPayload)
+		case strings.HasPrefix(name, "-"):
+			return nil, fmt.Errorf("%w: invalid package name %q", ErrInvalidTaskPayload, name)
+		default:
+			packages = append(packages, name)
+		}
+	}
+
+	if len(packages) == 0 {
+		return nil, fmt.Errorf("%w: package list must not be empty", ErrInvalidTaskPayload)
+	}
+
+	return packages, nil
+}
+
+func buildShellCommand(goos string, payload ShellExecPayload) (string, []string) {
+	if goos == "windows" {
 		shell := payload.Shell
 		if shell == "" {
 			shell = "cmd.exe"
@@ -162,6 +461,26 @@ func buildCommand(payload ShellExecPayload) (string, []string) {
 		shell = "/bin/sh"
 	}
 	return shell, []string{"-lc", payload.Command}
+}
+
+func formatCommandForLog(name string, args []string) string {
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, name)
+	for _, arg := range args {
+		if strings.ContainsAny(arg, " \t\r\n\"'") {
+			parts = append(parts, strconvQuote(arg))
+			continue
+		}
+		parts = append(parts, arg)
+	}
+
+	return strings.Join(parts, " ")
+}
+
+func strconvQuote(value string) string {
+	escaped := strings.ReplaceAll(value, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
+	return "\"" + escaped + "\""
 }
 
 func mergeEnvironment(overrides map[string]string) []string {
@@ -195,12 +514,19 @@ func scanOutput(wg *sync.WaitGroup, reader io.ReadCloser, stream string, onLog f
 	scanner.Buffer(buffer, 1024*1024)
 
 	for scanner.Scan() {
-		onLog(stream, scanner.Text())
+		emitLog(onLog, stream, scanner.Text())
 	}
 
 	if err := scanner.Err(); err != nil {
-		onLog("system", fmt.Sprintf("log stream error: %v", err))
+		emitLog(onLog, "system", fmt.Sprintf("log stream error: %v", err))
 	}
+}
+
+func emitLog(onLog func(string, string), stream, line string) {
+	if onLog == nil {
+		return
+	}
+	onLog(stream, line)
 }
 
 func exitCode(err error) int {
