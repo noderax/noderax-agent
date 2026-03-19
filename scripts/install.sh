@@ -4,15 +4,28 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AGENT_BIN="${AGENT_BIN:-$ROOT_DIR/noderax-agent}"
 
-if [[ -x "$AGENT_BIN" ]]; then
-  exec "$AGENT_BIN" enroll "$@"
+case "$(uname -s)" in
+  Linux|Darwin)
+    ;;
+  *)
+    echo "Unsupported operating system: $(uname -s)" >&2
+    exit 1
+    ;;
+esac
+
+if [[ "${EUID}" -ne 0 ]]; then
+  exec sudo -E "$0" "$@"
 fi
 
-if command -v go >/dev/null 2>&1; then
+if [[ ! -x "$AGENT_BIN" ]]; then
+  if ! command -v go >/dev/null 2>&1; then
+    echo "Go is not installed and no prebuilt noderax-agent binary was found." >&2
+    echo "Install Go or place a compiled binary at $AGENT_BIN." >&2
+    exit 1
+  fi
+
   cd "$ROOT_DIR"
-  exec go run ./cmd/agent enroll "$@"
+  go build -o "$AGENT_BIN" ./cmd/agent
 fi
 
-echo "noderax-agent binary not found and Go is not installed." >&2
-echo "Set AGENT_BIN to the compiled agent binary or install Go to run from source." >&2
-exit 1
+exec "$AGENT_BIN" install "$@"

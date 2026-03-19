@@ -1,0 +1,211 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/noderax/noderax-web/main/public/logo.webp" alt="Noderax" width="220" />
+</p>
+<h1 align="center">Noderax Agent</h1>
+
+Noderax Agent is a Go-based node agent that connects servers to the Noderax platform. It enrolls a machine, sends heartbeats and metrics, receives tasks from `noderax-api`, and executes supported operations such as shell commands and package management.
+
+## Highlights
+
+- Enrollment-based node onboarding with short-lived approval tokens
+- Background service support for Ubuntu and macOS
+- Built-in CLI for install, start, stop, restart, status, and config updates
+- Heartbeat, metrics, shell execution, and package management task support
+- Persistent identity storage for approved nodes
+
+## Supported Platforms
+
+- Ubuntu and Ubuntu-compatible Linux systems with `systemd`
+- macOS systems with `launchd`
+- Manual source-based execution on other developer environments
+
+## Quick Install
+
+Prerequisites:
+
+- `git`
+- `go`
+
+```bash
+git clone <repo-url> noderax-agent
+cd noderax-agent
+sudo ./scripts/install.sh
+```
+
+The installer auto-detects the current OS and then:
+
+- ask for the API URL
+- ask for the enrollment email
+- generate an enrollment token
+- wait for approval from the web UI
+- install the agent as a background service
+- start it automatically in the background
+
+### Ubuntu
+
+Installed paths on Ubuntu:
+
+- Binary: `/opt/noderax-agent/noderax-agent`
+- Symlink: `/usr/local/bin/noderax-agent`
+- Config: `/etc/noderax-agent/config.json`
+- State: `/var/lib/noderax-agent/agent_identity.json`
+- Service: `/etc/systemd/system/noderax-agent.service`
+
+### macOS
+
+Installed paths on macOS:
+
+- Binary: `/usr/local/lib/noderax-agent/noderax-agent`
+- Symlink: `/usr/local/bin/noderax-agent`
+- Config: `/usr/local/etc/noderax-agent/config.json`
+- State: `/usr/local/var/lib/noderax-agent/agent_identity.json`
+- Service: `/Library/LaunchDaemons/com.noderax.agent.plist`
+
+## Manual Installation
+
+### 1. Build the agent
+
+```bash
+go build -o noderax-agent ./cmd/agent
+```
+
+### 2. Prepare a config file
+
+```bash
+cp config.example.json config.json
+```
+
+Set at least:
+
+- `api_url`
+
+Leave `enrollment_token` empty. The enrollment command will populate it automatically.
+
+### 3. Run enrollment
+
+```bash
+./noderax-agent enroll
+```
+
+The command will:
+
+- ask for the enrollment email
+- call `POST /api/v1/enrollments/initiate`
+- display the short-lived token
+- save the token in the config file
+- wait for `GET /api/v1/enrollments/{token}` to become `approved`
+- write `nodeId` and `agentToken` into the identity state file
+
+### 4. Start the agent manually
+
+```bash
+./noderax-agent
+```
+
+If you want to point to a specific config file:
+
+```bash
+NODERAX_CONFIG_FILE=/path/to/config.json ./noderax-agent
+```
+
+## Service Management
+
+Once installed, the same CLI is used on both Ubuntu and macOS.
+
+```bash
+sudo noderax-agent start
+sudo noderax-agent stop
+sudo noderax-agent restart
+sudo noderax-agent status
+```
+
+## Configuration Management
+
+Show the active managed config:
+
+```bash
+noderax-agent config show
+```
+
+Update a config value:
+
+```bash
+sudo noderax-agent config set api_url https://api.example.com
+sudo noderax-agent config set task_timeout 30s
+sudo noderax-agent config set task_poll_interval 5s
+sudo noderax-agent config set log_level debug
+```
+
+After `config set`, the managed service is restarted automatically when installed.
+
+Supported config keys:
+
+- `api_url`
+- `enrollment_token`
+- `node_id`
+- `agent_token`
+- `heartbeat_interval`
+- `metrics_interval`
+- `task_poll_interval`
+- `request_timeout`
+- `task_timeout`
+- `shutdown_timeout`
+- `state_file`
+- `log_level`
+
+## Enrollment Flow
+
+The agent uses the following flow:
+
+1. Prompt the operator for the enrollment email.
+2. Send `POST /api/v1/enrollments/initiate` with:
+   - `email`
+   - `hostname`
+   - `additionalInfo.os`
+   - `additionalInfo.arch`
+   - `additionalInfo.agentVersion`
+3. Save the returned short-lived token into the config file.
+4. Wait for approval from the web UI via `GET /api/v1/enrollments/{token}`.
+5. Persist the approved `nodeId` and `agentToken`.
+6. Start normal heartbeat, metrics, and task execution loops.
+
+## Project Structure
+
+- [`cmd/agent`](cmd/agent): application entrypoint and CLI dispatch
+- [`internal/agent`](internal/agent): enrollment, identity persistence, and worker bootstrap
+- [`internal/agentctl`](internal/agentctl): install, service management, and config CLI
+- [`internal/api`](internal/api): API request/response models and HTTP client
+- [`internal/tasks`](internal/tasks): task polling and execution
+- [`internal/heartbeat`](internal/heartbeat): heartbeat worker
+- [`internal/metrics`](internal/metrics): metrics worker
+- [`internal/system`](internal/system): host and system information helpers
+- [`scripts`](scripts): installation entrypoints
+
+## Development
+
+Run tests:
+
+```bash
+go test ./...
+```
+
+Build locally:
+
+```bash
+go build -o noderax-agent ./cmd/agent
+```
+
+Run in foreground during development:
+
+```bash
+cp config.example.json config.json
+./noderax-agent enroll
+./noderax-agent
+```
+
+## Notes
+
+- Ubuntu installation assumes a `systemd`-based system.
+- macOS installation assumes `launchd` and requires `sudo`.
+- The managed service configuration path can be overridden with `NODERAX_CONFIG_FILE`.
+- For production release packaging, generating separate Ubuntu and macOS artifacts is recommended.

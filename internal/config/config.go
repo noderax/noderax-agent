@@ -51,8 +51,8 @@ type fileConfig struct {
 	LogLevel          string `json:"log_level"`
 }
 
-func Load() (Config, error) {
-	cfg := Config{
+func Default() Config {
+	return Config{
 		HeartbeatInterval: defaultHeartbeatInterval,
 		MetricsInterval:   defaultMetricsInterval,
 		TaskPollInterval:  defaultTaskPollInterval,
@@ -62,6 +62,10 @@ func Load() (Config, error) {
 		StateFile:         defaultStateFile,
 		LogLevel:          "info",
 	}
+}
+
+func Load() (Config, error) {
+	cfg := Default()
 
 	if configFile := detectConfigFile(); configFile != "" {
 		if err := mergeConfigFile(&cfg, configFile); err != nil {
@@ -74,6 +78,22 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	cfg.normalize()
+
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+
+	return cfg, nil
+}
+
+func LoadFile(path string) (Config, error) {
+	cfg := Default()
+
+	if err := mergeConfigFile(&cfg, path); err != nil {
+		return Config{}, err
+	}
+	cfg.ConfigFile = path
 	cfg.normalize()
 
 	if err := cfg.Validate(); err != nil {
@@ -170,6 +190,7 @@ func detectConfigFile() string {
 		"./config.local.json",
 		"./config.json",
 		"./config/config.json",
+		"/usr/local/etc/noderax-agent/config.json",
 		"/etc/noderax-agent/config.json",
 	}
 

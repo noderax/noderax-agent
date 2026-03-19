@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/noderax/noderax-agent/internal/agent"
+	"github.com/noderax/noderax-agent/internal/agentctl"
 	"github.com/noderax/noderax-agent/internal/api"
 	"github.com/noderax/noderax-agent/internal/config"
 	"github.com/noderax/noderax-agent/internal/logger"
@@ -20,6 +21,26 @@ var (
 )
 
 func main() {
+	baseLog := logger.New("info")
+	cli := agentctl.CLI{
+		Logger:  baseLog,
+		Version: version,
+		Stdin:   os.Stdin,
+		Stdout:  os.Stdout,
+		Stderr:  os.Stderr,
+	}
+
+	cliCtx, cliStop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cliStop()
+
+	if handled, err := cli.Handle(cliCtx, os.Args[1:]); handled {
+		if err != nil {
+			baseLog.Error("command failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)

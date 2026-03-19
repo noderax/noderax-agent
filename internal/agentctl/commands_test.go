@@ -1,0 +1,89 @@
+package agentctl
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/noderax/noderax-agent/internal/config"
+)
+
+func TestApplyConfigValue(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+
+	if err := applyConfigValue(&cfg, "api_url", "https://api.example.com"); err != nil {
+		t.Fatalf("applyConfigValue api_url returned error: %v", err)
+	}
+	if err := applyConfigValue(&cfg, "task_timeout", "45s"); err != nil {
+		t.Fatalf("applyConfigValue task_timeout returned error: %v", err)
+	}
+	if err := applyConfigValue(&cfg, "log_level", "debug"); err != nil {
+		t.Fatalf("applyConfigValue log_level returned error: %v", err)
+	}
+
+	if cfg.APIURL != "https://api.example.com" {
+		t.Fatalf("api url mismatch: got %q want %q", cfg.APIURL, "https://api.example.com")
+	}
+	if cfg.TaskTimeout != 45*time.Second {
+		t.Fatalf("task timeout mismatch: got %s want %s", cfg.TaskTimeout, 45*time.Second)
+	}
+	if cfg.LogLevel != "debug" {
+		t.Fatalf("log level mismatch: got %q want %q", cfg.LogLevel, "debug")
+	}
+}
+
+func TestApplyConfigValueRejectsUnknownKey(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	if err := applyConfigValue(&cfg, "unsupported_key", "value"); err == nil {
+		t.Fatal("expected error for unsupported key, got nil")
+	}
+}
+
+func TestRenderServiceUnit(t *testing.T) {
+	t.Parallel()
+
+	spec := platformSpec{
+		BinaryPath:  linuxBinaryPath,
+		WorkingDir:  linuxInstallDir,
+		ServiceName: linuxServiceName,
+	}
+	unit := renderServiceUnit(spec, linuxConfigPath)
+
+	if !strings.Contains(unit, "Environment=NODERAX_CONFIG_FILE="+linuxConfigPath) {
+		t.Fatalf("service unit is missing config path: %s", unit)
+	}
+	if !strings.Contains(unit, "ExecStart="+linuxBinaryPath) {
+		t.Fatalf("service unit is missing ExecStart: %s", unit)
+	}
+	if !strings.Contains(unit, "Restart=always") {
+		t.Fatalf("service unit is missing restart policy: %s", unit)
+	}
+}
+
+func TestRenderLaunchdPlist(t *testing.T) {
+	t.Parallel()
+
+	spec := platformSpec{
+		BinaryPath:    macOSBinaryPath,
+		WorkingDir:    macOSInstallDir,
+		ServiceName:   macOSServiceName,
+		LogStdoutPath: "/var/log/noderax-agent.log",
+		LogStderrPath: "/var/log/noderax-agent.error.log",
+	}
+
+	plist := renderLaunchdPlist(spec, macOSConfigPath)
+
+	if !strings.Contains(plist, "<string>"+macOSServiceName+"</string>") {
+		t.Fatalf("launchd plist is missing service name: %s", plist)
+	}
+	if !strings.Contains(plist, "<string>"+macOSBinaryPath+"</string>") {
+		t.Fatalf("launchd plist is missing binary path: %s", plist)
+	}
+	if !strings.Contains(plist, "<string>"+macOSConfigPath+"</string>") {
+		t.Fatalf("launchd plist is missing config path: %s", plist)
+	}
+}
