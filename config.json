@@ -4,11 +4,11 @@
   "node_id": "",
   "agent_token": "",
   "heartbeat_interval": "30s",
-  "metrics_interval": "60s",
-  "task_poll_interval": "15s",
+  "metrics_interval": "6s",
+  "task_poll_interval": "1s",
   "request_timeout": "10s",
   "task_timeout": "10m",
-  "shutdown_timeout": "20s",
+  "shutdown_timeout": "5s",
   "state_file": "./data/agent_identity.json",
   "log_level": "info"
 }
