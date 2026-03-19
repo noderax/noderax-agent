@@ -50,6 +50,22 @@ func (c *Client) Register(ctx context.Context, request RegisterRequest) (Registe
 	return response, nil
 }
 
+func (c *Client) InitiateEnrollment(ctx context.Context, request InitiateEnrollmentRequest) (InitiateEnrollmentResponse, error) {
+	var response InitiateEnrollmentResponse
+	if err := c.post(ctx, apiPath("/enrollments/initiate"), request, &response); err != nil {
+		return InitiateEnrollmentResponse{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) GetEnrollment(ctx context.Context, token string) (EnrollmentStatusResponse, error) {
+	var response EnrollmentStatusResponse
+	if err := c.get(ctx, apiPath(fmt.Sprintf("/enrollments/%s", token)), &response); err != nil {
+		return EnrollmentStatusResponse{}, err
+	}
+	return response, nil
+}
+
 func (c *Client) Heartbeat(ctx context.Context, request HeartbeatRequest) error {
 	return c.post(ctx, apiPath("/agent/heartbeat"), request, nil)
 }
@@ -102,6 +118,28 @@ func (c *Client) post(ctx context.Context, path string, request any, result any)
 
 	if response.IsError() {
 		return fmt.Errorf("post %s: status=%d message=%s", path, response.StatusCode(), apiErr.String())
+	}
+
+	return nil
+}
+
+func (c *Client) get(ctx context.Context, path string, result any) error {
+	apiErr := &ErrorResponse{}
+	req := c.http.R().
+		SetContext(ctx).
+		SetError(apiErr)
+
+	if result != nil {
+		req = req.SetResult(result)
+	}
+
+	response, err := req.Get(path)
+	if err != nil {
+		return fmt.Errorf("get %s: %w", path, err)
+	}
+
+	if response.IsError() {
+		return fmt.Errorf("get %s: status=%d message=%s", path, response.StatusCode(), apiErr.String())
 	}
 
 	return nil

@@ -21,6 +21,29 @@ type RegisterResponse struct {
 	AgentToken string `json:"agentToken"`
 }
 
+type EnrollmentAdditionalInfo struct {
+	OS           string `json:"os,omitempty"`
+	Arch         string `json:"arch,omitempty"`
+	AgentVersion string `json:"agentVersion,omitempty"`
+}
+
+type InitiateEnrollmentRequest struct {
+	Email          string                   `json:"email"`
+	Hostname       string                   `json:"hostname"`
+	AdditionalInfo EnrollmentAdditionalInfo `json:"additionalInfo"`
+}
+
+type InitiateEnrollmentResponse struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expiresAt,omitempty"`
+}
+
+type EnrollmentStatusResponse struct {
+	Status     string `json:"status"`
+	NodeID     string `json:"nodeId,omitempty"`
+	AgentToken string `json:"agentToken,omitempty"`
+}
+
 type HeartbeatRequest struct {
 	NodeID       string    `json:"nodeId"`
 	AgentToken   string    `json:"agentToken"`

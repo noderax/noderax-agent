@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,7 +13,6 @@ import (
 	"github.com/noderax/noderax-agent/internal/config"
 	"github.com/noderax/noderax-agent/internal/heartbeat"
 	"github.com/noderax/noderax-agent/internal/metrics"
-	"github.com/noderax/noderax-agent/internal/system"
 	"github.com/noderax/noderax-agent/internal/tasks"
 )
 
@@ -129,41 +129,26 @@ func (s *Service) bootstrapIdentity(ctx context.Context) error {
 		return err
 	}
 
-	hostInfo, err := system.HostInfo(ctx)
-	if err != nil {
-		s.logger.Warn("host info collection returned partial data", "error", err)
+	if strings.TrimSpace(s.cfg.EnrollmentToken) == "" {
+		return fmt.Errorf("agent identity is missing; run `noderax-agent enroll` to create an enrollment token")
 	}
 
-	requestCtx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
-	defer cancel()
-
-	response, err := s.client.Register(requestCtx, api.RegisterRequest{
-		EnrollmentToken: s.cfg.EnrollmentToken,
-		Hostname:        hostInfo.Hostname,
-		OperatingSystem: hostInfo.OS,
-		Platform:        hostInfo.Platform,
-		PlatformVersion: hostInfo.PlatformVersion,
-		KernelVersion:   hostInfo.KernelVersion,
-		Architecture:    hostInfo.Architecture,
-		AgentVersion:    s.version,
-	})
+	identity, err := completeEnrollment(
+		ctx,
+		s.cfg,
+		s.client,
+		s.logger,
+		s.store,
+		s.cfg.EnrollmentToken,
+		defaultEnrollmentPollInterval,
+		defaultEnrollmentWaitTimeout,
+	)
 	if err != nil {
-		return fmt.Errorf("register agent: %w", err)
-	}
-
-	identity := Identity{
-		NodeID:       response.NodeID,
-		AgentToken:   response.AgentToken,
-		RegisteredAt: time.Now().UTC(),
+		return fmt.Errorf("complete enrollment: %w", err)
 	}
 
 	s.identity.Set(identity)
 	s.client.SetAgentToken(identity.AgentToken)
-
-	if err := s.store.Save(identity); err != nil {
-		return fmt.Errorf("persist identity: %w", err)
-	}
-
-	s.logger.Info("agent registered successfully", "node_id", identity.NodeID)
+	s.logger.Info("agent enrollment approved", "node_id", identity.NodeID)
 	return nil
 }

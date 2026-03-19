@@ -34,8 +34,20 @@ func main() {
 		client.SetAgentToken(cfg.AgentToken)
 	}
 
-	svc := agent.NewService(cfg, client, log, version)
+	if len(os.Args) > 1 && os.Args[1] == "enroll" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
 
+		if err := agent.RunInteractiveEnrollment(ctx, cfg, client, log, version, os.Stdin, os.Stdout); err != nil {
+			log.Error("interactive enrollment failed", "error", err)
+			os.Exit(1)
+		}
+
+		log.Info("interactive enrollment completed")
+		return
+	}
+
+	svc := agent.NewService(cfg, client, log, version)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

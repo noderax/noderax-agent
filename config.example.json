@@ -1,6 +1,6 @@
 {
   "api_url": "https://api.noderax.example",
-  "enrollment_token": "replace-me-for-bootstrap",
+  "enrollment_token": "",
   "node_id": "",
   "agent_token": "",
   "heartbeat_interval": "30s",
@@ -12,4 +12,3 @@
   "state_file": "./data/agent_identity.json",
   "log_level": "info"
 }
-

@@ -83,6 +83,42 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+func SaveFile(path string, cfg Config) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("config path must not be empty")
+	}
+
+	raw := fileConfig{
+		APIURL:            cfg.APIURL,
+		EnrollmentToken:   cfg.EnrollmentToken,
+		NodeID:            cfg.NodeID,
+		AgentToken:        cfg.AgentToken,
+		HeartbeatInterval: cfg.HeartbeatInterval.String(),
+		MetricsInterval:   cfg.MetricsInterval.String(),
+		TaskPollInterval:  cfg.TaskPollInterval.String(),
+		RequestTimeout:    cfg.RequestTimeout.String(),
+		TaskTimeout:       cfg.TaskTimeout.String(),
+		ShutdownTimeout:   cfg.ShutdownTimeout.String(),
+		StateFile:         cfg.StateFile,
+		LogLevel:          cfg.LogLevel,
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config directory for %s: %w", path, err)
+	}
+
+	data, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode config file %s: %w", path, err)
+	}
+
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("write config file %s: %w", path, err)
+	}
+
+	return nil
+}
+
 func (c Config) Validate() error {
 	if strings.TrimSpace(c.APIURL) == "" {
 		return fmt.Errorf("API_URL is required; set API_URL or provide NODERAX_CONFIG_FILE, ./config.local.json, ./config.json, ./config/config.json, or /etc/noderax-agent/config.json")
