@@ -1,14 +1,14 @@
 {
   "api_url": "http://api.noderax-api.orb.local:3000",
-  "enrollment_token": "change-me-agent-enrollment-token",
+  "enrollment_token": "",
   "node_id": "",
   "agent_token": "",
   "heartbeat_interval": "30s",
   "metrics_interval": "6s",
   "task_poll_interval": "1s",
   "request_timeout": "10s",
-  "task_timeout": "10m",
+  "task_timeout": "10s",
   "shutdown_timeout": "5s",
-  "state_file": "./data/agent_identity.json",
+  "state_file": "data/agent_identity.json",
   "log_level": "info"
 }
