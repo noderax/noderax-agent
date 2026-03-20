@@ -72,17 +72,17 @@ type pingEvent struct {
 
 type metricsEvent struct {
 	Type         string             `json:"type"`
-	NodeID       string             `json:"nodeId"`
-	AgentToken   string             `json:"agentToken"`
+	NodeID       string             `json:"nodeId,omitempty"`
+	AgentToken   string             `json:"agentToken,omitempty"`
 	Timestamp    string             `json:"timestamp"`
 	CPUUsage     *float64           `json:"cpuUsage,omitempty"`
 	MemoryUsage  *float64           `json:"memoryUsage,omitempty"`
 	DiskUsage    *float64           `json:"diskUsage,omitempty"`
 	NetworkStats []api.NetworkStats `json:"networkStats,omitempty"`
-	CPU          api.CPUStats       `json:"cpu"`
-	Memory       api.MemoryStats    `json:"memory"`
-	Disk         api.DiskStats      `json:"disk"`
-	Networks     []api.NetworkStats `json:"networks"`
+	CPU          *api.CPUStats      `json:"cpu,omitempty"`
+	Memory       *api.MemoryStats   `json:"memory,omitempty"`
+	Disk         *api.DiskStats     `json:"disk,omitempty"`
+	Networks     []api.NetworkStats `json:"networks,omitempty"`
 }
 
 type taskAcceptedEvent struct {

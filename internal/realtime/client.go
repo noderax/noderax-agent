@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -26,6 +27,8 @@ const (
 )
 
 type AuthSuccessHook func(context.Context)
+
+var ErrSessionNotActive = errors.New("realtime session is not authenticated")
 
 type Stats struct {
 	Reconnects      int64
@@ -63,6 +66,8 @@ type Service struct {
 	maxQueueDepth   atomic.Int64
 	dispatchHandled atomic.Int64
 	selfChecked     atomic.Bool
+	sessionActive   atomic.Bool
+	metricsCompact  atomic.Bool
 }
 
 type socketIOConn struct {
@@ -101,7 +106,7 @@ func NewService(
 		onAuthSuccess = func(context.Context) {}
 	}
 
-	return &Service{
+	svc := &Service{
 		logger:         logger,
 		requestTimeout: requestTimeout,
 		pingInterval:   pingInterval,
@@ -114,7 +119,9 @@ func NewService(
 		namespace:      target.Namespace,
 		path:           target.Path,
 		outbound:       make(chan any, queueSize),
-	}, nil
+	}
+	svc.metricsCompact.Store(true)
+	return svc, nil
 }
 
 func (s *Service) Run(ctx context.Context) error {
@@ -226,23 +233,29 @@ func (s *Service) TaskCompleted(ctx context.Context, event api.CompleteTaskReque
 }
 
 func (s *Service) SendMetrics(ctx context.Context, event api.MetricsRequest) error {
-	cpuUsage := event.CPU.UsagePercent
-	memoryUsage := event.Memory.UsedPercent
-	diskUsage := event.Disk.UsedPercent
-	err := s.enqueueCritical(ctx, metricsEvent{
-		Type:         EventAgentMetrics,
-		NodeID:       event.NodeID,
-		AgentToken:   event.AgentToken,
-		Timestamp:    formatTimestampUTCMillis(event.CollectedAt),
-		CPUUsage:     &cpuUsage,
-		MemoryUsage:  &memoryUsage,
-		DiskUsage:    &diskUsage,
-		NetworkStats: event.Networks,
-		CPU:          event.CPU,
-		Memory:       event.Memory,
-		Disk:         event.Disk,
-		Networks:     event.Networks,
-	})
+	if !s.sessionActive.Load() {
+		return ErrSessionNotActive
+	}
+
+	payload := metricsEvent{
+		Type:        EventAgentMetrics,
+		Timestamp:   formatTimestampUTCMillis(event.CollectedAt),
+		CPUUsage:    sanitizeUsage(event.CPU.UsagePercent),
+		MemoryUsage: sanitizeUsage(event.Memory.UsedPercent),
+		DiskUsage:   sanitizeUsage(event.Disk.UsedPercent),
+	}
+
+	if !s.metricsCompact.Load() {
+		payload.NodeID = event.NodeID
+		payload.AgentToken = event.AgentToken
+		payload.NetworkStats = event.Networks
+		payload.Networks = event.Networks
+		payload.CPU = &event.CPU
+		payload.Memory = &event.Memory
+		payload.Disk = &event.Disk
+	}
+
+	err := s.enqueueCritical(ctx, payload)
 	if err == nil {
 		s.metricsSent.Add(1)
 	}
@@ -354,6 +367,7 @@ func (s *Service) connect(ctx context.Context, pollingOnly bool) (*socketIOConn,
 			return
 		}
 		s.logger.Info("realtime auth acknowledged", "node_id", ack.NodeID)
+		s.sessionActive.Store(true)
 		s.onAuthSuccess(ctx)
 		select {
 		case authOKCh <- struct{}{}:
@@ -373,6 +387,7 @@ func (s *Service) connect(ctx context.Context, pollingOnly bool) (*socketIOConn,
 		if msg == "" {
 			msg = "unknown auth error"
 		}
+		s.sessionActive.Store(false)
 		select {
 		case connectErrCh <- fmt.Errorf("auth error: %s", msg):
 		default:
@@ -380,6 +395,14 @@ func (s *Service) connect(ctx context.Context, pollingOnly bool) (*socketIOConn,
 	})
 
 	socket.OnEvent(EventAgentError, func(payload map[string]any) {
+		eventType, _ := payload["eventType"].(string)
+		message, _ := payload["message"].(string)
+		if eventType == EventAgentMetrics && strings.EqualFold(strings.TrimSpace(message), "Bad Request Exception") {
+			if !s.metricsCompact.Load() {
+				s.metricsCompact.Store(true)
+				s.logger.Warn("realtime metrics payload downgraded to compact mode after validation error")
+			}
+		}
 		s.logger.Warn("received realtime agent.error", "payload", payload)
 	})
 
@@ -390,12 +413,14 @@ func (s *Service) connect(ctx context.Context, pollingOnly bool) (*socketIOConn,
 		}
 	})
 	socket.OnDisconnect(func(reason sio.Reason) {
+		s.sessionActive.Store(false)
 		select {
 		case disconnectCh <- fmt.Errorf("socket.io disconnected: %s", reason):
 		default:
 		}
 	})
 	manager.OnError(func(err error) {
+		s.sessionActive.Store(false)
 		select {
 		case connectErrCh <- classifyDialError(err):
 		default:
@@ -638,6 +663,19 @@ func classifyDialError(err error) error {
 	default:
 		return fmt.Errorf("transport dial failure: %w", err)
 	}
+}
+
+func sanitizeUsage(value float64) *float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return nil
+	}
+	if value < 0 {
+		value = 0
+	}
+	if value > 100 {
+		value = 100
+	}
+	return &value
 }
 
 func backoffDelay(attempt int, jitterRatio float64) time.Duration {

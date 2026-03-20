@@ -53,6 +53,7 @@ func TestSendMetricsUsesMillisecondTimestamp(t *testing.T) {
 	t.Parallel()
 
 	svc := &Service{outbound: make(chan any, 1)}
+	svc.sessionActive.Store(true)
 	collectedAt := time.Date(2026, 3, 20, 10, 20, 30, 456789123, time.UTC)
 
 	err := svc.SendMetrics(context.Background(), api.MetricsRequest{

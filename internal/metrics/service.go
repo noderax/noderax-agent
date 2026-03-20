@@ -120,6 +120,10 @@ func (s *Service) collectAndSend(ctx context.Context) {
 		if errors.Is(err, context.Canceled) {
 			return
 		}
+		if errors.Is(err, realtime.ErrSessionNotActive) {
+			s.logger.Debug("realtime metrics skipped because session is not authenticated yet")
+			return
+		}
 		s.logger.Error("sending realtime metrics failed", "error", err)
 		return
 	}
