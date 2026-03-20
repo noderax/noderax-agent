@@ -3,6 +3,7 @@ package agentctl
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -73,6 +74,9 @@ func (c CLI) Handle(ctx context.Context, args []string) (bool, error) {
 	case "install":
 		brand.PrintLogo(c.stdoutOrDefault())
 		return true, c.Install(ctx)
+	case "uninstall":
+		brand.PrintLogo(c.stdoutOrDefault())
+		return true, c.Uninstall(ctx)
 	case "start", "stop", "restart", "status":
 		brand.PrintLogo(c.stdoutOrDefault())
 		return true, c.ServiceAction(ctx, args[0])
@@ -175,6 +179,88 @@ func (c CLI) Install(ctx context.Context) error {
 	}
 
 	_, _ = fmt.Fprint(c.stdoutOrDefault(), renderInstallSummary(spec, cfg, c.Version, mirroredConfigPath(cfg.ConfigFile)))
+	return nil
+}
+
+func (c CLI) Uninstall(ctx context.Context) error {
+	spec, err := currentPlatformSpec()
+	if err != nil {
+		return err
+	}
+	if spec.RequiresRoot {
+		if err := requireRoot(); err != nil {
+			return err
+		}
+	}
+
+	configPath := installedConfigPath(spec)
+	statePath := installedStatePath(configPath, spec.StatePath)
+
+	if err := c.stopAndDisableService(ctx, spec); err != nil {
+		return err
+	}
+
+	removed := make([]string, 0, 8)
+	missing := make([]string, 0, 8)
+
+	unitRemoved, err := removeFileIfExists(spec.ServiceUnit)
+	if err != nil {
+		return err
+	}
+	recordRemovalResult(&removed, &missing, "service unit", spec.ServiceUnit, unitRemoved)
+
+	switch spec.Manager {
+	case serviceManagerSystemd:
+		if commandExists("systemctl") {
+			_ = c.runSystemctl(ctx, "daemon-reload")
+			_ = c.runSystemctl(ctx, "reset-failed", spec.ServiceName)
+		}
+	case serviceManagerLaunchd:
+		for _, logPath := range []string{spec.LogStdoutPath, spec.LogStderrPath} {
+			logRemoved, err := removeFileIfExists(logPath)
+			if err != nil {
+				return err
+			}
+			recordRemovalResult(&removed, &missing, "log file", logPath, logRemoved)
+		}
+	}
+
+	symlinkRemoved, err := removeFileIfExists(spec.SymlinkPath)
+	if err != nil {
+		return err
+	}
+	recordRemovalResult(&removed, &missing, "symlink", spec.SymlinkPath, symlinkRemoved)
+
+	configRemoved, err := removeFileIfExists(configPath)
+	if err != nil {
+		return err
+	}
+	recordRemovalResult(&removed, &missing, "config file", configPath, configRemoved)
+
+	stateRemoved, err := removeFileIfExists(statePath)
+	if err != nil {
+		return err
+	}
+	recordRemovalResult(&removed, &missing, "state file", statePath, stateRemoved)
+
+	installRemoved, err := removeDirIfExists(spec.InstallDir)
+	if err != nil {
+		return err
+	}
+	recordRemovalResult(&removed, &missing, "install directory", spec.InstallDir, installRemoved)
+
+	for _, dir := range []string{
+		filepath.Dir(spec.ConfigPath),
+		filepath.Dir(spec.StatePath),
+	} {
+		dirRemoved, err := removeDirIfExists(dir)
+		if err != nil {
+			return err
+		}
+		recordRemovalResult(&removed, &missing, "managed directory", dir, dirRemoved)
+	}
+
+	_, _ = fmt.Fprint(c.stdoutOrDefault(), renderUninstallSummary(spec, removed, missing))
 	return nil
 }
 
@@ -481,11 +567,46 @@ func renderInstallSummary(spec platformSpec, cfg config.Config, version, localCo
 	fmt.Fprintf(&builder, "  status  %s\n", serviceCommandForSummary("status"))
 	fmt.Fprintf(&builder, "  config  %s\n", configShowCommandForSummary())
 	fmt.Fprintf(&builder, "  update  %s\n", configSetCommandForSummary())
+	fmt.Fprintf(&builder, "  remove  %s\n", uninstallCommandForSummary())
 
 	builder.WriteString("\n")
 	builder.WriteString("Notes\n")
 	builder.WriteString("  The service was started automatically during install.\n")
 	builder.WriteString("  Use the commands above whenever you want to manage it again.\n")
+
+	return builder.String()
+}
+
+func renderUninstallSummary(spec platformSpec, removed, missing []string) string {
+	var builder strings.Builder
+
+	builder.WriteString("\n")
+	builder.WriteString("========================================\n")
+	builder.WriteString(" Noderax Agent Removed\n")
+	builder.WriteString("========================================\n")
+	fmt.Fprintf(&builder, "Platform     : %s (%s)\n", runtime.GOOS, spec.Manager)
+	fmt.Fprintf(&builder, "Service      : %s\n", spec.ServiceName)
+
+	builder.WriteString("\n")
+	builder.WriteString("Removed\n")
+	for _, item := range removed {
+		fmt.Fprintf(&builder, "  %s\n", item)
+	}
+	if len(removed) == 0 {
+		builder.WriteString("  No installed artifacts were found.\n")
+	}
+
+	if len(missing) > 0 {
+		builder.WriteString("\n")
+		builder.WriteString("Already absent\n")
+		for _, item := range missing {
+			fmt.Fprintf(&builder, "  %s\n", item)
+		}
+	}
+
+	builder.WriteString("\n")
+	builder.WriteString("Next\n")
+	builder.WriteString("  Reinstall anytime with sudo ./scripts/install.sh\n")
 
 	return builder.String()
 }
@@ -516,6 +637,10 @@ func configSetCommandForSummary() string {
 	return "sudo noderax-agent config set api_url https://api.example.com"
 }
 
+func uninstallCommandForSummary() string {
+	return "sudo noderax-agent uninstall"
+}
+
 func logHintForSummary(spec platformSpec) string {
 	switch spec.Manager {
 	case serviceManagerSystemd:
@@ -528,6 +653,134 @@ func logHintForSummary(spec platformSpec) string {
 	default:
 		return "noderax-agent status"
 	}
+}
+
+func installedConfigPath(spec platformSpec) string {
+	if path := configPathFromServiceDefinition(spec.ServiceUnit); path != "" {
+		return path
+	}
+	if value := strings.TrimSpace(os.Getenv("NODERAX_CONFIG_FILE")); value != "" {
+		return filepath.Clean(value)
+	}
+	return spec.ConfigPath
+}
+
+func installedStatePath(configPath, fallback string) string {
+	configPath = strings.TrimSpace(configPath)
+	if configPath == "" {
+		return fallback
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fallback
+	}
+
+	var raw struct {
+		StateFile string `json:"state_file"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fallback
+	}
+	if strings.TrimSpace(raw.StateFile) == "" {
+		return fallback
+	}
+
+	return filepath.Clean(raw.StateFile)
+}
+
+func configPathFromServiceDefinition(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+
+	content := string(data)
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.Contains(line, "NODERAX_CONFIG_FILE=") {
+			continue
+		}
+		parts := strings.SplitN(line, "NODERAX_CONFIG_FILE=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		return filepath.Clean(strings.TrimSpace(parts[1]))
+	}
+
+	keyIndex := strings.Index(content, "<key>NODERAX_CONFIG_FILE</key>")
+	if keyIndex == -1 {
+		return ""
+	}
+
+	fragment := content[keyIndex:]
+	openTag := "<string>"
+	closeTag := "</string>"
+	start := strings.Index(fragment, openTag)
+	end := strings.Index(fragment, closeTag)
+	if start == -1 || end == -1 || end <= start+len(openTag) {
+		return ""
+	}
+
+	return filepath.Clean(strings.TrimSpace(fragment[start+len(openTag) : end]))
+}
+
+func recordRemovalResult(removed, missing *[]string, kind, path string, didRemove bool) {
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+
+	entry := kind + ": " + path
+	if didRemove {
+		*removed = append(*removed, entry)
+		return
+	}
+
+	*missing = append(*missing, entry)
+}
+
+func removeFileIfExists(path string) (bool, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false, nil
+	}
+
+	if _, err := os.Lstat(path); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat %s: %w", path, err)
+	}
+
+	if err := os.Remove(path); err != nil {
+		return false, fmt.Errorf("remove %s: %w", path, err)
+	}
+
+	return true, nil
+}
+
+func removeDirIfExists(path string) (bool, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false, nil
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat %s: %w", path, err)
+	}
+	if !info.IsDir() {
+		return false, fmt.Errorf("expected directory at %s", path)
+	}
+
+	if err := os.RemoveAll(path); err != nil {
+		return false, fmt.Errorf("remove directory %s: %w", path, err)
+	}
+
+	return true, nil
 }
 
 func copyExecutable(src, dst string) error {
@@ -641,6 +894,38 @@ func promptValue(reader *bufio.Reader, writer io.Writer, label, defaultValue str
 	}
 }
 
+func (c CLI) stopAndDisableService(ctx context.Context, spec platformSpec) error {
+	switch spec.Manager {
+	case serviceManagerSystemd:
+		if !commandExists("systemctl") {
+			return nil
+		}
+		if c.isSystemdActive(ctx, spec) {
+			if err := c.runSystemctl(ctx, "stop", spec.ServiceName); err != nil {
+				return err
+			}
+		}
+		if c.isSystemdEnabled(ctx, spec) {
+			if err := c.runSystemctl(ctx, "disable", spec.ServiceName); err != nil {
+				return err
+			}
+		}
+		return nil
+	case serviceManagerLaunchd:
+		if !commandExists("launchctl") {
+			return nil
+		}
+		if c.isLaunchdLoaded(ctx, spec) {
+			if err := c.runLaunchctl(ctx, "bootout", launchdTarget(spec)); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported service manager %q", spec.Manager)
+	}
+}
+
 func (c CLI) enableAndStartService(ctx context.Context, spec platformSpec) error {
 	switch spec.Manager {
 	case serviceManagerSystemd:
@@ -708,8 +993,23 @@ func (c CLI) isLaunchdLoaded(ctx context.Context, spec platformSpec) bool {
 	return cmd.Run() == nil
 }
 
+func (c CLI) isSystemdActive(ctx context.Context, spec platformSpec) bool {
+	cmd := exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", spec.ServiceName)
+	return cmd.Run() == nil
+}
+
+func (c CLI) isSystemdEnabled(ctx context.Context, spec platformSpec) bool {
+	cmd := exec.CommandContext(ctx, "systemctl", "is-enabled", "--quiet", spec.ServiceName)
+	return cmd.Run() == nil
+}
+
 func launchdTarget(spec platformSpec) string {
 	return spec.ServiceDomain + "/" + spec.ServiceName
+}
+
+func commandExists(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
 }
 
 func (c CLI) runSystemctl(ctx context.Context, args ...string) error {

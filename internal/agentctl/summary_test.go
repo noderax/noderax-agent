@@ -33,6 +33,7 @@ func TestRenderInstallSummaryIncludesUsefulCommands(t *testing.T) {
 		"status  sudo noderax-agent status",
 		"config  sudo noderax-agent config show",
 		"update  sudo noderax-agent config set api_url https://api.example.com",
+		"remove  sudo noderax-agent uninstall",
 		"Logs         : sudo journalctl -u " + linuxServiceName + " -f",
 	}
 

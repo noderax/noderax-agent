@@ -3,6 +3,7 @@ package agentctl
 import (
 	"bytes"
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,34 @@ func TestRenderLaunchdPlist(t *testing.T) {
 	}
 }
 
+func TestConfigPathFromServiceDefinitionContent(t *testing.T) {
+	t.Parallel()
+
+	systemdUnit := renderServiceUnit(platformSpec{
+		BinaryPath:  linuxBinaryPath,
+		WorkingDir:  linuxInstallDir,
+		ServiceName: linuxServiceName,
+	}, linuxConfigPath)
+	systemdPath := writeTempServiceDefinition(t, systemdUnit)
+
+	if got := configPathFromServiceDefinition(systemdPath); got != linuxConfigPath {
+		t.Fatalf("configPathFromServiceDefinition(systemd) = %q, want %q", got, linuxConfigPath)
+	}
+
+	launchdPlist := renderLaunchdPlist(platformSpec{
+		BinaryPath:    macOSBinaryPath,
+		WorkingDir:    macOSInstallDir,
+		ServiceName:   macOSServiceName,
+		LogStdoutPath: "/var/log/noderax-agent.log",
+		LogStderrPath: "/var/log/noderax-agent.error.log",
+	}, macOSConfigPath)
+	launchdPath := writeTempServiceDefinition(t, launchdPlist)
+
+	if got := configPathFromServiceDefinition(launchdPath); got != macOSConfigPath {
+		t.Fatalf("configPathFromServiceDefinition(launchd) = %q, want %q", got, macOSConfigPath)
+	}
+}
+
 func TestHandlePrintsLogoForManagedCommands(t *testing.T) {
 	t.Parallel()
 
@@ -109,4 +138,15 @@ func TestHandlePrintsLogoForManagedCommands(t *testing.T) {
 	if !strings.Contains(stdout.String(), "→→") {
 		t.Fatalf("expected logo to be printed, got %q", stdout.String())
 	}
+}
+
+func writeTempServiceDefinition(t *testing.T, content string) string {
+	t.Helper()
+
+	path := t.TempDir() + "/service-definition"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write temp service definition: %v", err)
+	}
+
+	return path
 }
