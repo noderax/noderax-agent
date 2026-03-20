@@ -67,7 +67,6 @@ type Service struct {
 	dispatchHandled atomic.Int64
 	selfChecked     atomic.Bool
 	sessionActive   atomic.Bool
-	metricsCompact  atomic.Bool
 }
 
 type socketIOConn struct {
@@ -120,7 +119,6 @@ func NewService(
 		path:           target.Path,
 		outbound:       make(chan any, queueSize),
 	}
-	svc.metricsCompact.Store(true)
 	return svc, nil
 }
 
@@ -143,6 +141,10 @@ func (s *Service) Run(ctx context.Context) error {
 
 		client, err := s.connect(ctx, preferPollingOnly)
 		if err != nil {
+			message := strings.ToLower(err.Error())
+			if strings.Contains(message, "auth error") || strings.Contains(message, "reading 'get'") || strings.Contains(message, "transport close") || strings.Contains(message, "io server disconnect") {
+				preferPollingOnly = true
+			}
 			s.logger.Warn("realtime connect failed", "error", err)
 			s.reconnects.Add(1)
 
@@ -162,7 +164,8 @@ func (s *Service) Run(ctx context.Context) error {
 			return nil
 		}
 
-		preferPollingOnly = strings.Contains(strings.ToLower(err.Error()), "transport close")
+		errText := strings.ToLower(err.Error())
+		preferPollingOnly = strings.Contains(errText, "transport close") || strings.Contains(errText, "io server disconnect")
 		if preferPollingOnly {
 			s.logger.Warn("realtime transport degraded; next reconnect will use polling-only", "error", err)
 		}
@@ -237,25 +240,18 @@ func (s *Service) SendMetrics(ctx context.Context, event api.MetricsRequest) err
 		return ErrSessionNotActive
 	}
 
-	payload := metricsEvent{
+	cpuUsage := sanitizeUsageOrZero(event.CPU.UsagePercent)
+	memoryUsage := sanitizeUsageOrZero(event.Memory.UsedPercent)
+	diskUsage := sanitizeUsageOrZero(event.Disk.UsedPercent)
+	err := s.enqueueCritical(ctx, metricsEvent{
 		Type:        EventAgentMetrics,
+		NodeID:      event.NodeID,
+		AgentToken:  event.AgentToken,
 		Timestamp:   formatTimestampUTCMillis(event.CollectedAt),
-		CPUUsage:    sanitizeUsage(event.CPU.UsagePercent),
-		MemoryUsage: sanitizeUsage(event.Memory.UsedPercent),
-		DiskUsage:   sanitizeUsage(event.Disk.UsedPercent),
-	}
-
-	if !s.metricsCompact.Load() {
-		payload.NodeID = event.NodeID
-		payload.AgentToken = event.AgentToken
-		payload.NetworkStats = event.Networks
-		payload.Networks = event.Networks
-		payload.CPU = &event.CPU
-		payload.Memory = &event.Memory
-		payload.Disk = &event.Disk
-	}
-
-	err := s.enqueueCritical(ctx, payload)
+		CPUUsage:    &cpuUsage,
+		MemoryUsage: &memoryUsage,
+		DiskUsage:   &diskUsage,
+	})
 	if err == nil {
 		s.metricsSent.Add(1)
 	}
@@ -395,14 +391,6 @@ func (s *Service) connect(ctx context.Context, pollingOnly bool) (*socketIOConn,
 	})
 
 	socket.OnEvent(EventAgentError, func(payload map[string]any) {
-		eventType, _ := payload["eventType"].(string)
-		message, _ := payload["message"].(string)
-		if eventType == EventAgentMetrics && strings.EqualFold(strings.TrimSpace(message), "Bad Request Exception") {
-			if !s.metricsCompact.Load() {
-				s.metricsCompact.Store(true)
-				s.logger.Warn("realtime metrics payload downgraded to compact mode after validation error")
-			}
-		}
 		s.logger.Warn("received realtime agent.error", "payload", payload)
 	})
 
@@ -676,6 +664,14 @@ func sanitizeUsage(value float64) *float64 {
 		value = 100
 	}
 	return &value
+}
+
+func sanitizeUsageOrZero(value float64) float64 {
+	v := sanitizeUsage(value)
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 func backoffDelay(attempt int, jitterRatio float64) time.Duration {

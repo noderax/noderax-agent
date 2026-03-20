@@ -72,8 +72,8 @@ type pingEvent struct {
 
 type metricsEvent struct {
 	Type         string             `json:"type"`
-	NodeID       string             `json:"nodeId,omitempty"`
-	AgentToken   string             `json:"agentToken,omitempty"`
+	NodeID       string             `json:"nodeId"`
+	AgentToken   string             `json:"agentToken"`
 	Timestamp    string             `json:"timestamp"`
 	CPUUsage     *float64           `json:"cpuUsage,omitempty"`
 	MemoryUsage  *float64           `json:"memoryUsage,omitempty"`

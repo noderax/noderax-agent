@@ -70,6 +70,15 @@ func TestSendMetricsUsesMillisecondTimestamp(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected event type: %T", msg)
 	}
+	if event.Type != EventAgentMetrics {
+		t.Fatalf("unexpected event type: %q", event.Type)
+	}
+	if event.NodeID != "node-1" {
+		t.Fatalf("unexpected node ID: %q", event.NodeID)
+	}
+	if event.AgentToken != "token-1" {
+		t.Fatalf("unexpected agent token: %q", event.AgentToken)
+	}
 
 	pattern := regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`)
 	if !pattern.MatchString(event.Timestamp) {
@@ -143,5 +152,16 @@ func TestEventForEmitRetainsType(t *testing.T) {
 	jsonText := string(serialized)
 	if !regexp.MustCompile(`"type":"task.accepted"`).MatchString(jsonText) {
 		t.Fatalf("payload is missing type field: %s", jsonText)
+	}
+}
+
+func TestSanitizeUsage(t *testing.T) {
+	t.Parallel()
+
+	if value := sanitizeUsage(-1); value == nil || *value != 0 {
+		t.Fatalf("expected floor to 0, got %#v", value)
+	}
+	if value := sanitizeUsage(101); value == nil || *value != 100 {
+		t.Fatalf("expected cap to 100, got %#v", value)
 	}
 }
