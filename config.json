@@ -1,14 +1,16 @@
 {
-  "api_url": "http://api.noderax-api.orb.local:3000",
+  "api_url": "http://api.noderax-api.orb.local",
   "enrollment_token": "",
   "node_id": "",
   "agent_token": "",
-  "heartbeat_interval": "30s",
-  "metrics_interval": "6s",
-  "task_poll_interval": "1s",
-  "request_timeout": "10s",
-  "task_timeout": "10s",
-  "shutdown_timeout": "5s",
+  "metrics_interval": "2s",
+  "request_timeout": "60s",
+  "task_timeout": "60s",
+  "shutdown_timeout": "60s",
+  "realtime_enabled": true,
+  "realtime_ping_interval": "2s",
+  "realtime_queue_size": 1024,
+  "realtime_backoff_jitter": 0.2,
   "state_file": "data/agent_identity.json",
   "log_level": "info"
 }

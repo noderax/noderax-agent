@@ -45,17 +45,31 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		identity.Credentials,
 	)
 
+	metricsService := metrics.NewService(
+		nil,
+		logger,
+		cfg.MetricsInterval,
+		cfg.RequestTimeout,
+		identity.Credentials,
+	)
+
 	realtimeService, err := realtime.NewService(
 		cfg.APIURL,
 		cfg.RequestTimeout,
 		cfg.RealtimePingInterval,
+		cfg.RealtimeQueueSize,
+		cfg.RealtimeBackoffJitter,
 		logger,
 		identity.Credentials,
 		taskService,
+		func(context.Context) {
+			metricsService.TriggerImmediateSnapshot()
+		},
 	)
 	if err != nil {
 		logger.Error("failed to initialize realtime service", "error", err)
 	}
+	metricsService.SetRealtimeClient(realtimeService)
 	taskService.SetRealtimeEvents(realtimeService)
 
 	return &Service{
@@ -65,13 +79,7 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		version:  version,
 		identity: identity,
 		store:    NewIdentityStore(cfg.StateFile),
-		metrics: metrics.NewService(
-			realtimeService,
-			logger,
-			cfg.MetricsInterval,
-			cfg.RequestTimeout,
-			identity.Credentials,
-		),
+		metrics:  metricsService,
 		tasks:    taskService,
 		realtime: realtimeService,
 		initErr:  err,

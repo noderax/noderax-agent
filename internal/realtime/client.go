@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -17,12 +19,28 @@ import (
 
 var reconnectDelays = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
 
+type AuthSuccessHook func(context.Context)
+
+type Stats struct {
+	Reconnects      int64
+	PingsSent       int64
+	MetricsSent     int64
+	LifecycleSent   int64
+	QueueDrops      int64
+	LogDrops        int64
+	QueueDepth      int64
+	MaxQueueDepth   int64
+	DispatchHandled int64
+}
+
 type Service struct {
 	logger         *slog.Logger
 	requestTimeout time.Duration
 	pingInterval   time.Duration
+	jitterRatio    float64
 	credentials    func() (string, string)
 	dispatcher     *dispatcher
+	onAuthSuccess  AuthSuccessHook
 
 	dialer   websocket.Dialer
 	wsURL    string
@@ -30,32 +48,59 @@ type Service struct {
 
 	mu   sync.RWMutex
 	conn *websocket.Conn
+
+	reconnects      atomic.Int64
+	pingsSent       atomic.Int64
+	metricsSent     atomic.Int64
+	lifecycleSent   atomic.Int64
+	queueDrops      atomic.Int64
+	logDrops        atomic.Int64
+	queueDepth      atomic.Int64
+	maxQueueDepth   atomic.Int64
+	dispatchHandled atomic.Int64
 }
 
 func NewService(
 	apiURL string,
 	requestTimeout time.Duration,
 	pingInterval time.Duration,
+	queueSize int,
+	jitterRatio float64,
 	logger *slog.Logger,
 	credentials func() (string, string),
 	handler taskDispatcher,
+	onAuthSuccess AuthSuccessHook,
 ) (*Service, error) {
 	wsURL, err := realtimeEndpoint(apiURL)
 	if err != nil {
 		return nil, err
+	}
+	if queueSize <= 0 {
+		queueSize = 1024
+	}
+	if jitterRatio < 0 {
+		jitterRatio = 0
+	}
+	if jitterRatio > 1 {
+		jitterRatio = 1
+	}
+	if onAuthSuccess == nil {
+		onAuthSuccess = func(context.Context) {}
 	}
 
 	return &Service{
 		logger:         logger,
 		requestTimeout: requestTimeout,
 		pingInterval:   pingInterval,
+		jitterRatio:    jitterRatio,
 		credentials:    credentials,
 		dispatcher:     newDispatcher(handler),
+		onAuthSuccess:  onAuthSuccess,
 		dialer: websocket.Dialer{
 			HandshakeTimeout: requestTimeout,
 		},
 		wsURL:    wsURL,
-		outbound: make(chan any, 1024),
+		outbound: make(chan any, queueSize),
 	}, nil
 }
 
@@ -71,7 +116,10 @@ func (s *Service) Run(ctx context.Context) error {
 		conn, err := s.connect(ctx)
 		if err != nil {
 			s.logger.Warn("realtime connect failed", "error", err)
-			if !sleepWithContext(ctx, reconnectDelays[minInt(retryIndex, len(reconnectDelays)-1)]) {
+			s.reconnects.Add(1)
+
+			delay := applyJitter(reconnectDelays[minInt(retryIndex, len(reconnectDelays)-1)], s.jitterRatio)
+			if !sleepWithContext(ctx, delay) {
 				return nil
 			}
 			if retryIndex < len(reconnectDelays)-1 {
@@ -84,13 +132,15 @@ func (s *Service) Run(ctx context.Context) error {
 		s.logger.Info("realtime websocket connected", "url", s.wsURL)
 
 		err = s.runConnection(ctx, conn)
-
 		if err == nil || errors.Is(err, context.Canceled) {
 			return nil
 		}
 
 		s.logger.Warn("realtime connection closed", "error", err)
-		if !sleepWithContext(ctx, reconnectDelays[minInt(retryIndex, len(reconnectDelays)-1)]) {
+		s.reconnects.Add(1)
+
+		delay := applyJitter(reconnectDelays[minInt(retryIndex, len(reconnectDelays)-1)], s.jitterRatio)
+		if !sleepWithContext(ctx, delay) {
 			return nil
 		}
 		if retryIndex < len(reconnectDelays)-1 {
@@ -100,54 +150,96 @@ func (s *Service) Run(ctx context.Context) error {
 }
 
 func (s *Service) TaskAccepted(ctx context.Context, taskID string, timestamp time.Time) error {
-	return s.enqueue(ctx, taskAcceptedEvent{
+	err := s.enqueueCritical(ctx, taskAcceptedEvent{
 		Type:      EventTaskAccepted,
 		TaskID:    taskID,
-		Timestamp: timestamp.UTC(),
+		Timestamp: formatTimestampUTCMillis(timestamp),
 	})
+	if err == nil {
+		s.lifecycleSent.Add(1)
+	}
+	return err
 }
 
 func (s *Service) TaskStarted(ctx context.Context, taskID string, timestamp time.Time) error {
-	return s.enqueue(ctx, taskStartedEvent{
+	err := s.enqueueCritical(ctx, taskStartedEvent{
 		Type:      EventTaskStarted,
 		TaskID:    taskID,
-		Timestamp: timestamp.UTC(),
+		Timestamp: formatTimestampUTCMillis(timestamp),
 	})
+	if err == nil {
+		s.lifecycleSent.Add(1)
+	}
+	return err
 }
 
 func (s *Service) TaskLog(ctx context.Context, taskID, stream, line string, timestamp time.Time) error {
-	return s.enqueue(ctx, taskLogEvent{
+	err := s.enqueueBestEffort(taskLogEvent{
 		Type:      EventTaskLog,
 		TaskID:    taskID,
 		Stream:    stream,
 		Line:      line,
-		Timestamp: timestamp.UTC(),
+		Timestamp: formatTimestampUTCMillis(timestamp),
 	})
+	if err == nil {
+		s.lifecycleSent.Add(1)
+	}
+	return err
 }
 
 func (s *Service) TaskCompleted(ctx context.Context, event api.CompleteTaskRequest) error {
-	return s.enqueue(ctx, taskCompletedEvent{
+	err := s.enqueueCritical(ctx, taskCompletedEvent{
 		Type:       EventTaskComplete,
 		TaskID:     event.TaskID,
 		Status:     event.Status,
 		ExitCode:   event.ExitCode,
 		Error:      event.Error,
 		DurationMS: event.DurationMS,
-		Timestamp:  event.CompletedAt.UTC(),
+		Timestamp:  formatTimestampUTCMillis(event.CompletedAt),
 	})
+	if err == nil {
+		s.lifecycleSent.Add(1)
+	}
+	return err
 }
 
 func (s *Service) SendMetrics(ctx context.Context, event api.MetricsRequest) error {
-	return s.enqueue(ctx, metricsEvent{
+	err := s.enqueueCritical(ctx, metricsEvent{
 		Type:       EventAgentMetrics,
 		NodeID:     event.NodeID,
 		AgentToken: event.AgentToken,
-		Timestamp:  event.CollectedAt.UTC(),
+		Timestamp:  formatTimestampUTCMillis(event.CollectedAt),
 		CPU:        event.CPU,
 		Memory:     event.Memory,
 		Disk:       event.Disk,
 		Networks:   event.Networks,
 	})
+	if err == nil {
+		s.metricsSent.Add(1)
+	}
+	return err
+}
+
+func (s *Service) ReportLogDrop() {
+	s.logDrops.Add(1)
+}
+
+func (s *Service) ReportDispatchHandled() {
+	s.dispatchHandled.Add(1)
+}
+
+func (s *Service) SnapshotStats() Stats {
+	return Stats{
+		Reconnects:      s.reconnects.Load(),
+		PingsSent:       s.pingsSent.Load(),
+		MetricsSent:     s.metricsSent.Load(),
+		LifecycleSent:   s.lifecycleSent.Load(),
+		QueueDrops:      s.queueDrops.Load(),
+		LogDrops:        s.logDrops.Load(),
+		QueueDepth:      s.queueDepth.Load(),
+		MaxQueueDepth:   s.maxQueueDepth.Load(),
+		DispatchHandled: s.dispatchHandled.Load(),
+	}
 }
 
 func (s *Service) connect(ctx context.Context) (*websocket.Conn, error) {
@@ -178,6 +270,8 @@ func (s *Service) connect(ctx context.Context) (*websocket.Conn, error) {
 		conn.Close()
 		return nil, fmt.Errorf("send realtime auth event: %w", err)
 	}
+
+	s.onAuthSuccess(ctx)
 
 	s.setConnection(conn)
 	return conn, nil
@@ -221,31 +315,56 @@ func (s *Service) writeLoop(ctx context.Context, conn *websocket.Conn, errCh cha
 		case <-ctx.Done():
 			return
 		case message := <-s.outbound:
+			s.updateQueueDepth(-1)
 			if err := writeJSON(ctx, conn, message); err != nil {
 				errCh <- err
 				return
 			}
 		case <-ticker.C:
-			if err := writeJSON(ctx, conn, pingEvent{Type: EventAgentPing, Timestamp: time.Now().UTC()}); err != nil {
+			if err := writeJSON(ctx, conn, pingEvent{Type: EventAgentPing, Timestamp: formatTimestampUTCMillis(time.Now())}); err != nil {
 				errCh <- err
 				return
 			}
+			s.pingsSent.Add(1)
 		}
 	}
 }
 
-func (s *Service) enqueue(ctx context.Context, message any) error {
+func (s *Service) enqueueCritical(ctx context.Context, message any) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	select {
-	case s.outbound <- message:
-		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	case s.outbound <- message:
+		s.updateQueueDepth(1)
+		return nil
+	}
+}
+
+func (s *Service) enqueueBestEffort(message any) error {
+	select {
+	case s.outbound <- message:
+		s.updateQueueDepth(1)
+		return nil
 	default:
+		s.queueDrops.Add(1)
 		return fmt.Errorf("realtime outbound queue is full")
+	}
+}
+
+func (s *Service) updateQueueDepth(delta int64) {
+	depth := s.queueDepth.Add(delta)
+	for {
+		max := s.maxQueueDepth.Load()
+		if depth <= max {
+			return
+		}
+		if s.maxQueueDepth.CompareAndSwap(max, depth) {
+			return
+		}
 	}
 }
 
@@ -261,6 +380,7 @@ func (s *Service) closeConnection() {
 	if s.conn == nil {
 		return
 	}
+	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shutdown"), time.Now().Add(time.Second))
 	_ = s.conn.Close()
 	s.conn = nil
 }
@@ -299,6 +419,22 @@ func writeJSON(ctx context.Context, conn *websocket.Conn, payload any) error {
 		return fmt.Errorf("write websocket message: %w", err)
 	}
 	return nil
+}
+
+func applyJitter(base time.Duration, ratio float64) time.Duration {
+	if base <= 0 || ratio <= 0 {
+		return base
+	}
+	maxJitter := int64(float64(base) * ratio)
+	if maxJitter <= 0 {
+		return base
+	}
+	offset := rand.Int63n((maxJitter*2)+1) - maxJitter
+	jittered := int64(base) + offset
+	if jittered < int64(time.Millisecond) {
+		jittered = int64(time.Millisecond)
+	}
+	return time.Duration(jittered)
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) bool {

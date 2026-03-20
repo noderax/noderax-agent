@@ -13,63 +13,71 @@ import (
 
 const (
 	defaultHeartbeatInterval = 30 * time.Second
-	defaultMetricsInterval   = 60 * time.Second
+	defaultMetricsInterval   = 2 * time.Second
 	defaultTaskPollInterval  = 15 * time.Second
 	defaultRequestTimeout    = 10 * time.Second
 	defaultTaskTimeout       = 10 * time.Minute
 	defaultShutdownTimeout   = 20 * time.Second
-	defaultRealtimePing      = 30 * time.Second
+	defaultRealtimePing      = 2 * time.Second
+	defaultRealtimeQueueSize = 1024
+	defaultRealtimeJitter    = 0.2
 	defaultStateFile         = "./data/agent_identity.json"
 	configMirrorEnv          = "NODERAX_CONFIG_MIRROR_FILE"
 )
 
 type Config struct {
-	APIURL               string
-	EnrollmentToken      string
-	NodeID               string
-	AgentToken           string
-	HeartbeatInterval    time.Duration
-	MetricsInterval      time.Duration
-	TaskPollInterval     time.Duration
-	RequestTimeout       time.Duration
-	TaskTimeout          time.Duration
-	ShutdownTimeout      time.Duration
-	RealtimeEnabled      bool
-	RealtimePingInterval time.Duration
-	StateFile            string
-	ConfigFile           string
-	LogLevel             string
+	APIURL                string
+	EnrollmentToken       string
+	NodeID                string
+	AgentToken            string
+	HeartbeatInterval     time.Duration
+	MetricsInterval       time.Duration
+	TaskPollInterval      time.Duration
+	RequestTimeout        time.Duration
+	TaskTimeout           time.Duration
+	ShutdownTimeout       time.Duration
+	RealtimeEnabled       bool
+	RealtimePingInterval  time.Duration
+	RealtimeQueueSize     int
+	RealtimeBackoffJitter float64
+	StateFile             string
+	ConfigFile            string
+	LogLevel              string
 }
 
 type fileConfig struct {
-	APIURL               string `json:"api_url"`
-	EnrollmentToken      string `json:"enrollment_token"`
-	NodeID               string `json:"node_id"`
-	AgentToken           string `json:"agent_token"`
-	HeartbeatInterval    string `json:"heartbeat_interval"`
-	MetricsInterval      string `json:"metrics_interval"`
-	TaskPollInterval     string `json:"task_poll_interval"`
-	RequestTimeout       string `json:"request_timeout"`
-	TaskTimeout          string `json:"task_timeout"`
-	ShutdownTimeout      string `json:"shutdown_timeout"`
-	RealtimeEnabled      *bool  `json:"realtime_enabled,omitempty"`
-	RealtimePingInterval string `json:"realtime_ping_interval,omitempty"`
-	StateFile            string `json:"state_file"`
-	LogLevel             string `json:"log_level"`
+	APIURL                string   `json:"api_url"`
+	EnrollmentToken       string   `json:"enrollment_token"`
+	NodeID                string   `json:"node_id"`
+	AgentToken            string   `json:"agent_token"`
+	HeartbeatInterval     string   `json:"heartbeat_interval"`
+	MetricsInterval       string   `json:"metrics_interval"`
+	TaskPollInterval      string   `json:"task_poll_interval"`
+	RequestTimeout        string   `json:"request_timeout"`
+	TaskTimeout           string   `json:"task_timeout"`
+	ShutdownTimeout       string   `json:"shutdown_timeout"`
+	RealtimeEnabled       *bool    `json:"realtime_enabled,omitempty"`
+	RealtimePingInterval  string   `json:"realtime_ping_interval,omitempty"`
+	RealtimeQueueSize     *int     `json:"realtime_queue_size,omitempty"`
+	RealtimeBackoffJitter *float64 `json:"realtime_backoff_jitter,omitempty"`
+	StateFile             string   `json:"state_file"`
+	LogLevel              string   `json:"log_level"`
 }
 
 func Default() Config {
 	return Config{
-		HeartbeatInterval:    defaultHeartbeatInterval,
-		MetricsInterval:      defaultMetricsInterval,
-		TaskPollInterval:     defaultTaskPollInterval,
-		RequestTimeout:       defaultRequestTimeout,
-		TaskTimeout:          defaultTaskTimeout,
-		ShutdownTimeout:      defaultShutdownTimeout,
-		RealtimeEnabled:      true,
-		RealtimePingInterval: defaultRealtimePing,
-		StateFile:            defaultStateFile,
-		LogLevel:             "info",
+		HeartbeatInterval:     defaultHeartbeatInterval,
+		MetricsInterval:       defaultMetricsInterval,
+		TaskPollInterval:      defaultTaskPollInterval,
+		RequestTimeout:        defaultRequestTimeout,
+		TaskTimeout:           defaultTaskTimeout,
+		ShutdownTimeout:       defaultShutdownTimeout,
+		RealtimeEnabled:       true,
+		RealtimePingInterval:  defaultRealtimePing,
+		RealtimeQueueSize:     defaultRealtimeQueueSize,
+		RealtimeBackoffJitter: defaultRealtimeJitter,
+		StateFile:             defaultStateFile,
+		LogLevel:              "info",
 	}
 }
 
@@ -118,21 +126,25 @@ func SaveFile(path string, cfg Config) error {
 	}
 
 	realtimeEnabled := cfg.RealtimeEnabled
+	realtimeQueueSize := cfg.RealtimeQueueSize
+	realtimeBackoffJitter := cfg.RealtimeBackoffJitter
 	raw := fileConfig{
-		APIURL:               cfg.APIURL,
-		EnrollmentToken:      cfg.EnrollmentToken,
-		NodeID:               cfg.NodeID,
-		AgentToken:           cfg.AgentToken,
-		HeartbeatInterval:    cfg.HeartbeatInterval.String(),
-		MetricsInterval:      cfg.MetricsInterval.String(),
-		TaskPollInterval:     cfg.TaskPollInterval.String(),
-		RequestTimeout:       cfg.RequestTimeout.String(),
-		TaskTimeout:          cfg.TaskTimeout.String(),
-		ShutdownTimeout:      cfg.ShutdownTimeout.String(),
-		RealtimeEnabled:      &realtimeEnabled,
-		RealtimePingInterval: cfg.RealtimePingInterval.String(),
-		StateFile:            cfg.StateFile,
-		LogLevel:             cfg.LogLevel,
+		APIURL:                cfg.APIURL,
+		EnrollmentToken:       cfg.EnrollmentToken,
+		NodeID:                cfg.NodeID,
+		AgentToken:            cfg.AgentToken,
+		HeartbeatInterval:     cfg.HeartbeatInterval.String(),
+		MetricsInterval:       cfg.MetricsInterval.String(),
+		TaskPollInterval:      cfg.TaskPollInterval.String(),
+		RequestTimeout:        cfg.RequestTimeout.String(),
+		TaskTimeout:           cfg.TaskTimeout.String(),
+		ShutdownTimeout:       cfg.ShutdownTimeout.String(),
+		RealtimeEnabled:       &realtimeEnabled,
+		RealtimePingInterval:  cfg.RealtimePingInterval.String(),
+		RealtimeQueueSize:     &realtimeQueueSize,
+		RealtimeBackoffJitter: &realtimeBackoffJitter,
+		StateFile:             cfg.StateFile,
+		LogLevel:              cfg.LogLevel,
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -194,6 +206,12 @@ func (c Config) Validate() error {
 	}
 	if c.RealtimePingInterval <= 0 {
 		return fmt.Errorf("REALTIME_PING_INTERVAL must be greater than zero")
+	}
+	if c.RealtimeQueueSize <= 0 {
+		return fmt.Errorf("REALTIME_QUEUE_SIZE must be greater than zero")
+	}
+	if c.RealtimeBackoffJitter < 0 || c.RealtimeBackoffJitter > 1 {
+		return fmt.Errorf("REALTIME_BACKOFF_JITTER must be between 0 and 1")
 	}
 	if strings.TrimSpace(c.StateFile) == "" {
 		return fmt.Errorf("STATE_FILE must not be empty")
@@ -259,6 +277,12 @@ func mergeConfigFile(cfg *Config, path string) error {
 	if raw.RealtimeEnabled != nil {
 		cfg.RealtimeEnabled = *raw.RealtimeEnabled
 	}
+	if raw.RealtimeQueueSize != nil {
+		cfg.RealtimeQueueSize = *raw.RealtimeQueueSize
+	}
+	if raw.RealtimeBackoffJitter != nil {
+		cfg.RealtimeBackoffJitter = *raw.RealtimeBackoffJitter
+	}
 
 	if err := applyDuration(&cfg.HeartbeatInterval, "heartbeat_interval", raw.HeartbeatInterval); err != nil {
 		return err
@@ -317,6 +341,12 @@ func mergeEnv(cfg *Config) error {
 	if err := overrideDuration(&cfg.RealtimePingInterval, "REALTIME_PING_INTERVAL"); err != nil {
 		return err
 	}
+	if err := overrideInt(&cfg.RealtimeQueueSize, "REALTIME_QUEUE_SIZE"); err != nil {
+		return err
+	}
+	if err := overrideFloat(&cfg.RealtimeBackoffJitter, "REALTIME_BACKOFF_JITTER"); err != nil {
+		return err
+	}
 
 	if cfg.StateFile != "" {
 		cfg.StateFile = filepath.Clean(cfg.StateFile)
@@ -358,6 +388,36 @@ func overrideBool(target *bool, key string) error {
 	}
 
 	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", key, err)
+	}
+
+	*target = parsed
+	return nil
+}
+
+func overrideInt(target *int, key string) error {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return nil
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", key, err)
+	}
+
+	*target = parsed
+	return nil
+}
+
+func overrideFloat(target *float64, key string) error {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return nil
+	}
+
+	parsed, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return fmt.Errorf("parse %s: %w", key, err)
 	}

@@ -3,12 +3,14 @@
   "enrollment_token": "",
   "node_id": "",
   "agent_token": "",
-  "metrics_interval": "60s",
+  "metrics_interval": "2s",
   "request_timeout": "10s",
   "task_timeout": "10m",
   "shutdown_timeout": "20s",
   "realtime_enabled": true,
-  "realtime_ping_interval": "30s",
+  "realtime_ping_interval": "2s",
+  "realtime_queue_size": 1024,
+  "realtime_backoff_jitter": 0.2,
   "state_file": "./data/agent_identity.json",
   "log_level": "info"
 }

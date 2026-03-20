@@ -63,15 +63,15 @@ type authEvent struct {
 }
 
 type pingEvent struct {
-	Type      string    `json:"type"`
-	Timestamp time.Time `json:"timestamp"`
+	Type      string `json:"type"`
+	Timestamp string `json:"timestamp"`
 }
 
 type metricsEvent struct {
 	Type       string             `json:"type"`
 	NodeID     string             `json:"nodeId"`
 	AgentToken string             `json:"agentToken"`
-	Timestamp  time.Time          `json:"timestamp"`
+	Timestamp  string             `json:"timestamp"`
 	CPU        api.CPUStats       `json:"cpu"`
 	Memory     api.MemoryStats    `json:"memory"`
 	Disk       api.DiskStats      `json:"disk"`
@@ -79,31 +79,35 @@ type metricsEvent struct {
 }
 
 type taskAcceptedEvent struct {
-	Type      string    `json:"type"`
-	TaskID    string    `json:"taskId"`
-	Timestamp time.Time `json:"timestamp"`
+	Type      string `json:"type"`
+	TaskID    string `json:"taskId"`
+	Timestamp string `json:"timestamp"`
 }
 
 type taskStartedEvent struct {
-	Type      string    `json:"type"`
-	TaskID    string    `json:"taskId"`
-	Timestamp time.Time `json:"timestamp"`
+	Type      string `json:"type"`
+	TaskID    string `json:"taskId"`
+	Timestamp string `json:"timestamp"`
 }
 
 type taskLogEvent struct {
-	Type      string    `json:"type"`
-	TaskID    string    `json:"taskId"`
-	Stream    string    `json:"stream"`
-	Line      string    `json:"line"`
-	Timestamp time.Time `json:"timestamp"`
+	Type      string `json:"type"`
+	TaskID    string `json:"taskId"`
+	Stream    string `json:"stream"`
+	Line      string `json:"line"`
+	Timestamp string `json:"timestamp"`
 }
 
 type taskCompletedEvent struct {
-	Type       string    `json:"type"`
-	TaskID     string    `json:"taskId"`
-	Status     string    `json:"status"`
-	ExitCode   int       `json:"exitCode"`
-	Error      string    `json:"error,omitempty"`
-	DurationMS int64     `json:"durationMs"`
-	Timestamp  time.Time `json:"timestamp"`
+	Type       string `json:"type"`
+	TaskID     string `json:"taskId"`
+	Status     string `json:"status"`
+	ExitCode   int    `json:"exitCode"`
+	Error      string `json:"error,omitempty"`
+	DurationMS int64  `json:"durationMs"`
+	Timestamp  string `json:"timestamp"`
+}
+
+func formatTimestampUTCMillis(value time.Time) string {
+	return value.UTC().Format("2006-01-02T15:04:05.000Z")
 }

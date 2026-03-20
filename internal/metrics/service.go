@@ -18,6 +18,7 @@ type Service struct {
 	requestTimeout time.Duration
 	credentials    func() (string, string)
 	collector      *system.Collector
+	triggerNow     chan struct{}
 }
 
 func NewService(
@@ -34,12 +35,15 @@ func NewService(
 		requestTimeout: requestTimeout,
 		credentials:    credentials,
 		collector:      system.NewCollector(),
+		triggerNow:     make(chan struct{}, 1),
 	}
 }
 
-func (s *Service) Run(ctx context.Context) error {
-	s.collectAndSend(ctx)
+func (s *Service) SetRealtimeClient(client *realtime.Service) {
+	s.realtime = client
+}
 
+func (s *Service) Run(ctx context.Context) error {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 
@@ -49,7 +53,16 @@ func (s *Service) Run(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 			s.collectAndSend(ctx)
+		case <-s.triggerNow:
+			s.collectAndSend(ctx)
 		}
+	}
+}
+
+func (s *Service) TriggerImmediateSnapshot() {
+	select {
+	case s.triggerNow <- struct{}{}:
+	default:
 	}
 }
 

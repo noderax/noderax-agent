@@ -27,6 +27,8 @@ type RealtimeTaskEvents interface {
 	TaskStarted(context.Context, string, time.Time) error
 	TaskLog(context.Context, string, string, string, time.Time) error
 	TaskCompleted(context.Context, api.CompleteTaskRequest) error
+	ReportLogDrop()
+	ReportDispatchHandled()
 }
 
 func NewService(
@@ -69,6 +71,10 @@ func (s *Service) SetRealtimeEvents(events RealtimeTaskEvents) {
 }
 
 func (s *Service) DispatchRealtimeTask(ctx context.Context, task api.Task) bool {
+	if realtime := s.realtimeEvents(); realtime != nil {
+		realtime.ReportDispatchHandled()
+	}
+
 	if !s.markRunning(task.ID) {
 		s.logger.Warn("task is already running, skipping duplicate", "task_id", task.ID)
 		return false
@@ -126,6 +132,7 @@ func (s *Service) handleTask(parentCtx context.Context, task api.Task) {
 		completedAt = time.Now().UTC()
 	}
 
+	completeSent := false
 	completeErr := realtime.TaskCompleted(parentCtx, api.CompleteTaskRequest{
 		NodeID:      nodeID,
 		AgentToken:  agentToken,
@@ -136,8 +143,15 @@ func (s *Service) handleTask(parentCtx context.Context, task api.Task) {
 		CompletedAt: completedAt,
 		DurationMS:  result.Duration.Milliseconds(),
 	})
+	if completeErr == nil {
+		completeSent = true
+	}
 	if completeErr != nil {
 		s.logger.Error("failed to complete task", "task_id", task.ID, "error", completeErr)
+	}
+
+	if !completeSent {
+		s.logger.Warn("task.completed event was not delivered", "task_id", task.ID)
 	}
 }
 
@@ -209,6 +223,7 @@ func (s *realtimeTaskLogSink) Enqueue(stream, line string) {
 	select {
 	case s.ch <- entry:
 	default:
+		s.realtime.ReportLogDrop()
 		s.logger.Warn("dropping realtime task.log event because the buffer is full", "task_id", s.taskID)
 	}
 }
