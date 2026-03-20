@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -245,7 +246,7 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 		return nil, fmt.Errorf("agent credentials are missing")
 	}
 
-	reqHeader := transport.NewRequestHeader(nil)
+	reqHeader := transport.NewRequestHeader(http.Header{})
 	reqHeader.Set("Authorization", "Bearer "+agentToken)
 
 	randomization := float32(s.jitterRatio)
