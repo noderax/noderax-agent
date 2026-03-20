@@ -2,19 +2,18 @@ package realtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
-	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/noderax/noderax-agent/internal/api"
+	socketio_client "github.com/zhouhui8915/go-socket.io-client"
 )
 
 var reconnectDelays = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
@@ -41,13 +40,8 @@ type Service struct {
 	credentials    func() (string, string)
 	dispatcher     *dispatcher
 	onAuthSuccess  AuthSuccessHook
-
-	dialer   websocket.Dialer
-	wsURL    string
-	outbound chan any
-
-	mu   sync.RWMutex
-	conn *websocket.Conn
+	baseURL        string
+	outbound       chan any
 
 	reconnects      atomic.Int64
 	pingsSent       atomic.Int64
@@ -71,7 +65,7 @@ func NewService(
 	handler taskDispatcher,
 	onAuthSuccess AuthSuccessHook,
 ) (*Service, error) {
-	wsURL, err := realtimeEndpoint(apiURL)
+	baseURL, err := realtimeEndpoint(apiURL)
 	if err != nil {
 		return nil, err
 	}
@@ -96,24 +90,19 @@ func NewService(
 		credentials:    credentials,
 		dispatcher:     newDispatcher(handler),
 		onAuthSuccess:  onAuthSuccess,
-		dialer: websocket.Dialer{
-			HandshakeTimeout: requestTimeout,
-		},
-		wsURL:    wsURL,
-		outbound: make(chan any, queueSize),
+		baseURL:        baseURL,
+		outbound:       make(chan any, queueSize),
 	}, nil
 }
 
 func (s *Service) Run(ctx context.Context) error {
-	defer s.closeConnection()
-
 	retryIndex := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
 
-		conn, err := s.connect(ctx)
+		client, err := s.connect(ctx)
 		if err != nil {
 			s.logger.Warn("realtime connect failed", "error", err)
 			s.reconnects.Add(1)
@@ -129,14 +118,14 @@ func (s *Service) Run(ctx context.Context) error {
 		}
 
 		retryIndex = 0
-		s.logger.Info("realtime websocket connected", "url", s.wsURL)
+		s.logger.Info("realtime socket.io connected", "url", s.baseURL)
 
-		err = s.runConnection(ctx, conn)
+		err = s.runConnection(ctx, client)
 		if err == nil || errors.Is(err, context.Canceled) {
 			return nil
 		}
 
-		s.logger.Warn("realtime connection closed", "error", err)
+		s.logger.Warn("realtime socket.io connection closed", "error", err)
 		s.reconnects.Add(1)
 
 		delay := applyJitter(reconnectDelays[minInt(retryIndex, len(reconnectDelays)-1)], s.jitterRatio)
@@ -242,71 +231,105 @@ func (s *Service) SnapshotStats() Stats {
 	}
 }
 
-func (s *Service) connect(ctx context.Context) (*websocket.Conn, error) {
+func (s *Service) connect(ctx context.Context) (*socketio_client.Client, error) {
 	nodeID, agentToken := s.credentials()
 	if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(agentToken) == "" {
 		return nil, fmt.Errorf("agent credentials are missing")
 	}
 
-	header := make(http.Header)
-	header.Set("Authorization", "Bearer "+agentToken)
+	opts := &socketio_client.Options{
+		Transport: "websocket",
+		Header: map[string][]string{
+			"Authorization": {"Bearer " + agentToken},
+		},
+		Query: map[string]string{},
+	}
 
-	conn, response, err := s.dialer.DialContext(ctx, s.wsURL, header)
+	client, err := socketio_client.NewClient(s.baseURL, opts)
 	if err != nil {
-		if response != nil {
-			return nil, fmt.Errorf("dial websocket failed: status=%d: %w", response.StatusCode, err)
+		return nil, fmt.Errorf("dial socket.io failed: %w", err)
+	}
+
+	dispatchEvent := func(payload any) {
+		envelope := inboundEnvelope{Type: EventTaskDispatch}
+		if payload == nil {
+			return
 		}
-		return nil, fmt.Errorf("dial websocket failed: %w", err)
+
+		bytes, err := json.Marshal(payload)
+		if err != nil {
+			s.logger.Warn("failed to encode socket.io task payload", "error", err)
+			return
+		}
+
+		var maybeEnvelope inboundEnvelope
+		if err := json.Unmarshal(bytes, &maybeEnvelope); err == nil && maybeEnvelope.Task != nil {
+			envelope = maybeEnvelope
+		} else {
+			var task api.Task
+			if err := json.Unmarshal(bytes, &task); err != nil {
+				s.logger.Warn("failed to decode socket.io task payload", "error", err)
+				return
+			}
+			envelope.Task = &task
+		}
+
+		finalBytes, err := json.Marshal(envelope)
+		if err != nil {
+			s.logger.Warn("failed to marshal normalized dispatch envelope", "error", err)
+			return
+		}
+
+		if err := s.dispatcher.handleMessage(ctx, finalBytes); err != nil {
+			s.logger.Warn("realtime dispatch handling failed", "error", err)
+		}
 	}
 
-	if err := conn.SetReadDeadline(time.Time{}); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("clear websocket read deadline: %w", err)
-	}
+	_ = client.On(EventTaskDispatch, func(payload map[string]any) {
+		dispatchEvent(payload)
+	})
+	_ = client.On("message", func(payload map[string]any) {
+		dispatchEvent(payload)
+	})
 
-	authCtx, cancel := context.WithTimeout(ctx, s.requestTimeout)
-	defer cancel()
-	if err := writeJSON(authCtx, conn, authEvent{Type: EventAgentAuth, NodeID: nodeID, AgentToken: agentToken}); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("send realtime auth event: %w", err)
+	authEvent := authEvent{Type: EventAgentAuth, NodeID: nodeID, AgentToken: agentToken}
+	if err := client.Emit(EventAgentAuth, authEvent); err != nil {
+		return nil, fmt.Errorf("emit realtime auth event: %w", err)
 	}
 
 	s.onAuthSuccess(ctx)
-
-	s.setConnection(conn)
-	return conn, nil
+	return client, nil
 }
 
-func (s *Service) runConnection(ctx context.Context, conn *websocket.Conn) error {
-	defer s.closeConnection()
+func (s *Service) runConnection(ctx context.Context, client *socketio_client.Client) error {
+	disconnectCh := make(chan error, 1)
+	_ = client.On("disconnection", func() {
+		select {
+		case disconnectCh <- fmt.Errorf("socket.io disconnected"):
+		default:
+		}
+	})
+	_ = client.On("error", func() {
+		select {
+		case disconnectCh <- fmt.Errorf("socket.io error event"):
+		default:
+		}
+	})
 
-	errCh := make(chan error, 2)
-	go s.readLoop(ctx, conn, errCh)
-	go s.writeLoop(ctx, conn, errCh)
+	errCh := make(chan error, 1)
+	go s.writeLoop(ctx, client, errCh)
 
 	select {
 	case <-ctx.Done():
 		return nil
+	case err := <-disconnectCh:
+		return err
 	case err := <-errCh:
 		return err
 	}
 }
 
-func (s *Service) readLoop(ctx context.Context, conn *websocket.Conn, errCh chan<- error) {
-	for {
-		_, data, err := conn.ReadMessage()
-		if err != nil {
-			errCh <- err
-			return
-		}
-
-		if err := s.dispatcher.handleMessage(ctx, data); err != nil {
-			s.logger.Warn("realtime message handling failed", "error", err)
-		}
-	}
-}
-
-func (s *Service) writeLoop(ctx context.Context, conn *websocket.Conn, errCh chan<- error) {
+func (s *Service) writeLoop(ctx context.Context, client *socketio_client.Client, errCh chan<- error) {
 	ticker := time.NewTicker(s.pingInterval)
 	defer ticker.Stop()
 
@@ -316,18 +339,52 @@ func (s *Service) writeLoop(ctx context.Context, conn *websocket.Conn, errCh cha
 			return
 		case message := <-s.outbound:
 			s.updateQueueDepth(-1)
-			if err := writeJSON(ctx, conn, message); err != nil {
+			eventName, payload, err := eventForEmit(message)
+			if err != nil {
 				errCh <- err
 				return
 			}
+			if err := client.Emit(eventName, payload); err != nil {
+				errCh <- fmt.Errorf("emit %s failed: %w", eventName, err)
+				return
+			}
 		case <-ticker.C:
-			if err := writeJSON(ctx, conn, pingEvent{Type: EventAgentPing, Timestamp: formatTimestampUTCMillis(time.Now())}); err != nil {
-				errCh <- err
+			payload := pingEvent{Type: EventAgentPing, Timestamp: formatTimestampUTCMillis(time.Now())}
+			if err := client.Emit(EventAgentPing, payload); err != nil {
+				errCh <- fmt.Errorf("emit ping failed: %w", err)
 				return
 			}
 			s.pingsSent.Add(1)
 		}
 	}
+}
+
+func eventForEmit(message any) (string, any, error) {
+	data, err := json.Marshal(message)
+	if err != nil {
+		return "", nil, fmt.Errorf("marshal outbound event: %w", err)
+	}
+
+	payload := make(map[string]any)
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", nil, fmt.Errorf("decode outbound event map: %w", err)
+	}
+
+	eventValue, ok := payload["type"]
+	if !ok {
+		return "", nil, fmt.Errorf("outbound event missing type")
+	}
+	eventName, ok := eventValue.(string)
+	if !ok || strings.TrimSpace(eventName) == "" {
+		return "", nil, fmt.Errorf("outbound event type is invalid")
+	}
+
+	delete(payload, "type")
+	if len(payload) == 0 {
+		return eventName, map[string]any{"type": eventName}, nil
+	}
+	payload["type"] = eventName
+	return eventName, payload, nil
 }
 
 func (s *Service) enqueueCritical(ctx context.Context, message any) error {
@@ -368,57 +425,20 @@ func (s *Service) updateQueueDepth(delta int64) {
 	}
 }
 
-func (s *Service) setConnection(conn *websocket.Conn) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.conn = conn
-}
-
-func (s *Service) closeConnection() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.conn == nil {
-		return
-	}
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shutdown"), time.Now().Add(time.Second))
-	_ = s.conn.Close()
-	s.conn = nil
-}
-
 func realtimeEndpoint(apiURL string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(apiURL))
 	if err != nil {
 		return "", fmt.Errorf("parse API_URL for realtime endpoint: %w", err)
 	}
 
-	switch parsed.Scheme {
-	case "https":
-		parsed.Scheme = "wss"
-	case "http":
-		parsed.Scheme = "ws"
-	default:
-		return "", fmt.Errorf("API_URL has unsupported scheme for realtime endpoint: %q", parsed.Scheme)
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("API_URL has unsupported scheme for socket.io endpoint: %q", parsed.Scheme)
 	}
 
 	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/agent-realtime"
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return parsed.String(), nil
-}
-
-func writeJSON(ctx context.Context, conn *websocket.Conn, payload any) error {
-	deadline := time.Now().Add(10 * time.Second)
-	if value, ok := ctx.Deadline(); ok && !value.IsZero() {
-		deadline = value
-	}
-
-	if err := conn.SetWriteDeadline(deadline); err != nil {
-		return fmt.Errorf("set websocket write deadline: %w", err)
-	}
-	if err := conn.WriteJSON(payload); err != nil {
-		return fmt.Errorf("write websocket message: %w", err)
-	}
-	return nil
 }
 
 func applyJitter(base time.Duration, ratio float64) time.Duration {
