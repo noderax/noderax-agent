@@ -10,6 +10,7 @@ import (
 	"github.com/noderax/noderax-agent/internal/agent"
 	"github.com/noderax/noderax-agent/internal/agentctl"
 	"github.com/noderax/noderax-agent/internal/api"
+	"github.com/noderax/noderax-agent/internal/brand"
 	"github.com/noderax/noderax-agent/internal/config"
 	"github.com/noderax/noderax-agent/internal/logger"
 )
@@ -32,6 +33,10 @@ func main() {
 
 	cliCtx, cliStop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cliStop()
+
+	if len(os.Args) > 1 {
+		brand.PrintLogo(os.Stdout)
+	}
 
 	if handled, err := cli.Handle(cliCtx, os.Args[1:]); handled {
 		if err != nil {
