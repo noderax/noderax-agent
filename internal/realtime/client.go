@@ -12,8 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	sio "github.com/karagenc/socket.io-go"
+	eio "github.com/karagenc/socket.io-go/engine.io"
+	"github.com/karagenc/socket.io-go/engine.io/transport"
 	"github.com/noderax/noderax-agent/internal/api"
-	socketio_client "github.com/zhouhui8915/go-socket.io-client"
 )
 
 var reconnectDelays = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
@@ -52,6 +54,12 @@ type Service struct {
 	queueDepth      atomic.Int64
 	maxQueueDepth   atomic.Int64
 	dispatchHandled atomic.Int64
+}
+
+type socketIOConn struct {
+	manager      *sio.Manager
+	socket       sio.ClientSocket
+	disconnectCh <-chan error
 }
 
 func NewService(
@@ -231,24 +239,29 @@ func (s *Service) SnapshotStats() Stats {
 	}
 }
 
-func (s *Service) connect(ctx context.Context) (*socketio_client.Client, error) {
+func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 	nodeID, agentToken := s.credentials()
 	if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(agentToken) == "" {
 		return nil, fmt.Errorf("agent credentials are missing")
 	}
 
-	opts := &socketio_client.Options{
-		Transport: "websocket",
-		Header: map[string][]string{
-			"Authorization": {"Bearer " + agentToken},
-		},
-		Query: map[string]string{},
-	}
+	reqHeader := transport.NewRequestHeader(nil)
+	reqHeader.Set("Authorization", "Bearer "+agentToken)
 
-	client, err := socketio_client.NewClient(s.baseURL, opts)
-	if err != nil {
-		return nil, fmt.Errorf("dial socket.io failed: %w", err)
-	}
+	randomization := float32(s.jitterRatio)
+	manager := sio.NewManager(s.baseURL, &sio.ManagerConfig{
+		NoReconnection:      true,
+		RandomizationFactor: &randomization,
+		EIO: eio.ClientConfig{
+			Transports:    []string{"websocket"},
+			RequestHeader: reqHeader,
+		},
+	})
+	socket := manager.Socket("/", &sio.ClientSocketConfig{})
+
+	connectedCh := make(chan struct{}, 1)
+	connectErrCh := make(chan error, 1)
+	disconnectCh := make(chan error, 1)
 
 	dispatchEvent := func(payload any) {
 		envelope := inboundEnvelope{Type: EventTaskDispatch}
@@ -285,51 +298,82 @@ func (s *Service) connect(ctx context.Context) (*socketio_client.Client, error) 
 		}
 	}
 
-	_ = client.On(EventTaskDispatch, func(payload map[string]any) {
+	socket.OnConnect(func() {
+		authPayload := authEvent{Type: EventAgentAuth, NodeID: nodeID, AgentToken: agentToken}
+		socket.Emit(EventAgentAuth, authPayload)
+		s.onAuthSuccess(ctx)
+		select {
+		case connectedCh <- struct{}{}:
+		default:
+		}
+	})
+	socket.OnConnectError(func(err any) {
+		select {
+		case connectErrCh <- fmt.Errorf("socket.io connect error: %v", err):
+		default:
+		}
+	})
+	socket.OnDisconnect(func(reason sio.Reason) {
+		select {
+		case disconnectCh <- fmt.Errorf("socket.io disconnected: %s", reason):
+		default:
+		}
+	})
+	manager.OnError(func(err error) {
+		select {
+		case connectErrCh <- fmt.Errorf("socket.io manager error: %w", err):
+		default:
+		}
+	})
+
+	socket.OnEvent(EventTaskDispatch, func(payload map[string]any) {
 		dispatchEvent(payload)
 	})
-	_ = client.On("message", func(payload map[string]any) {
+	socket.OnEvent("message", func(payload map[string]any) {
 		dispatchEvent(payload)
 	})
 
-	authEvent := authEvent{Type: EventAgentAuth, NodeID: nodeID, AgentToken: agentToken}
-	if err := client.Emit(EventAgentAuth, authEvent); err != nil {
-		return nil, fmt.Errorf("emit realtime auth event: %w", err)
+	socket.Connect()
+
+	connectTimeout := s.requestTimeout
+	if connectTimeout <= 0 {
+		connectTimeout = 10 * time.Second
 	}
+	timeout := time.NewTimer(connectTimeout)
+	defer timeout.Stop()
 
-	s.onAuthSuccess(ctx)
-	return client, nil
+	select {
+	case <-ctx.Done():
+		manager.Close()
+		return nil, ctx.Err()
+	case <-timeout.C:
+		manager.Close()
+		return nil, fmt.Errorf("dial socket.io failed: connect timeout after %s", connectTimeout)
+	case err := <-connectErrCh:
+		manager.Close()
+		return nil, fmt.Errorf("dial socket.io failed: %w", err)
+	case <-connectedCh:
+		return &socketIOConn{manager: manager, socket: socket, disconnectCh: disconnectCh}, nil
+	}
 }
 
-func (s *Service) runConnection(ctx context.Context, client *socketio_client.Client) error {
-	disconnectCh := make(chan error, 1)
-	_ = client.On("disconnection", func() {
-		select {
-		case disconnectCh <- fmt.Errorf("socket.io disconnected"):
-		default:
-		}
-	})
-	_ = client.On("error", func() {
-		select {
-		case disconnectCh <- fmt.Errorf("socket.io error event"):
-		default:
-		}
-	})
+func (s *Service) runConnection(ctx context.Context, conn *socketIOConn) error {
+	defer conn.manager.Close()
 
 	errCh := make(chan error, 1)
-	go s.writeLoop(ctx, client, errCh)
+	go s.writeLoop(ctx, conn.socket, errCh)
 
 	select {
 	case <-ctx.Done():
 		return nil
-	case err := <-disconnectCh:
+	case err := <-conn.disconnectCh:
 		return err
 	case err := <-errCh:
 		return err
 	}
 }
 
-func (s *Service) writeLoop(ctx context.Context, client *socketio_client.Client, errCh chan<- error) {
+func (s *Service) writeLoop(ctx context.Context, socket sio.ClientSocket, errCh chan<- error) {
 	ticker := time.NewTicker(s.pingInterval)
 	defer ticker.Stop()
 
@@ -344,16 +388,10 @@ func (s *Service) writeLoop(ctx context.Context, client *socketio_client.Client,
 				errCh <- err
 				return
 			}
-			if err := client.Emit(eventName, payload); err != nil {
-				errCh <- fmt.Errorf("emit %s failed: %w", eventName, err)
-				return
-			}
+			socket.Emit(eventName, payload)
 		case <-ticker.C:
 			payload := pingEvent{Type: EventAgentPing, Timestamp: formatTimestampUTCMillis(time.Now())}
-			if err := client.Emit(EventAgentPing, payload); err != nil {
-				errCh <- fmt.Errorf("emit ping failed: %w", err)
-				return
-			}
+			socket.Emit(EventAgentPing, payload)
 			s.pingsSent.Add(1)
 		}
 	}
