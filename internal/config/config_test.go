@@ -51,6 +51,12 @@ func TestDefaultLowLatencyRealtimeSettings(t *testing.T) {
 	if cfg.RealtimeBackoffJitter != 0.2 {
 		t.Fatalf("unexpected realtime jitter default: got=%f want=0.2", cfg.RealtimeBackoffJitter)
 	}
+	if cfg.RealtimeNamespace != "/agent-realtime" {
+		t.Fatalf("unexpected realtime namespace default: got=%q want=/agent-realtime", cfg.RealtimeNamespace)
+	}
+	if cfg.RealtimePath != "/socket.io/" {
+		t.Fatalf("unexpected realtime path default: got=%q want=/socket.io/", cfg.RealtimePath)
+	}
 }
 
 func TestValidateRealtimeKnobs(t *testing.T) {
@@ -68,5 +74,27 @@ func TestValidateRealtimeKnobs(t *testing.T) {
 	cfg.RealtimeBackoffJitter = 1.2
 	if err := cfg.Validate(); err == nil {
 		t.Fatalf("expected validation error for realtime jitter")
+	}
+
+	cfg = Default()
+	cfg.APIURL = "https://api.example.com"
+	cfg.RealtimeNamespace = "agent-realtime"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected validation error for realtime namespace")
+	}
+
+	cfg = Default()
+	cfg.APIURL = "https://api.example.com"
+	cfg.RealtimePath = "socket.io"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected validation error for realtime path")
+	}
+}
+
+func TestNormalizeAPIURLDefaultsToHTTPS(t *testing.T) {
+	t.Parallel()
+
+	if got := normalizeAPIURL("api.example.com"); got != "https://api.example.com" {
+		t.Fatalf("unexpected normalized URL: got=%q", got)
 	}
 }

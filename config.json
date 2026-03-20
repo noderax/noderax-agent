@@ -8,9 +8,11 @@
   "task_timeout": "60s",
   "shutdown_timeout": "60s",
   "realtime_enabled": true,
-  "realtime_ping_interval": "2s",
+  "realtime_ping_interval": "10s",
   "realtime_queue_size": 1024,
   "realtime_backoff_jitter": 0.2,
+  "realtime_namespace": "/agent-realtime",
+  "realtime_path": "/socket.io/",
   "state_file": "data/agent_identity.json",
   "log_level": "info"
 }

@@ -55,6 +55,8 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 
 	realtimeService, err := realtime.NewService(
 		cfg.APIURL,
+		cfg.RealtimeNamespace,
+		cfg.RealtimePath,
 		cfg.RequestTimeout,
 		cfg.RealtimePingInterval,
 		cfg.RealtimeQueueSize,

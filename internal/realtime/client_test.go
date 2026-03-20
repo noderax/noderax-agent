@@ -2,6 +2,7 @@ package realtime
 
 import (
 	"context"
+	"encoding/json"
 	"regexp"
 	"testing"
 	"time"
@@ -89,5 +90,57 @@ func TestReportLogDropIncrementsCounter(t *testing.T) {
 
 	if got := svc.SnapshotStats().LogDrops; got != 2 {
 		t.Fatalf("log drop counter mismatch: got=%d want=2", got)
+	}
+}
+
+func TestNormalizeRealtimeTargetDefaults(t *testing.T) {
+	t.Parallel()
+
+	target, err := normalizeRealtimeTarget("api.example.com", "", "")
+	if err != nil {
+		t.Fatalf("normalizeRealtimeTarget() error = %v", err)
+	}
+
+	if target.DialURL != "https://api.example.com/socket.io/" {
+		t.Fatalf("unexpected dial URL: %q", target.DialURL)
+	}
+	if target.Namespace != "/agent-realtime" {
+		t.Fatalf("unexpected namespace: %q", target.Namespace)
+	}
+	if target.Path != "/socket.io/" {
+		t.Fatalf("unexpected path: %q", target.Path)
+	}
+}
+
+func TestNormalizeRealtimeTargetRejectsInvalidURL(t *testing.T) {
+	t.Parallel()
+
+	if _, err := normalizeRealtimeTarget("http://", "/agent-realtime", "/socket.io/"); err == nil {
+		t.Fatalf("expected invalid URL error")
+	}
+}
+
+func TestEventForEmitRetainsType(t *testing.T) {
+	t.Parallel()
+
+	eventName, payload, err := eventForEmit(taskAcceptedEvent{
+		Type:      EventTaskAccepted,
+		TaskID:    "task-1",
+		Timestamp: "2026-03-20T22:00:00.123Z",
+	})
+	if err != nil {
+		t.Fatalf("eventForEmit() error = %v", err)
+	}
+	if eventName != EventTaskAccepted {
+		t.Fatalf("unexpected event name: %q", eventName)
+	}
+
+	serialized, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	jsonText := string(serialized)
+	if !regexp.MustCompile(`"type":"task.accepted"`).MatchString(jsonText) {
+		t.Fatalf("payload is missing type field: %s", jsonText)
 	}
 }

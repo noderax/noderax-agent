@@ -11,6 +11,9 @@ import (
 
 const (
 	EventAgentAuth    = "agent.auth"
+	EventAgentAuthAck = "agent.auth.ack"
+	EventAgentAuthErr = "agent.auth.error"
+	EventAgentError   = "agent.error"
 	EventAgentPing    = "agent.ping"
 	EventAgentMetrics = "agent.metrics"
 	EventTaskDispatch = "task.dispatch"
@@ -68,14 +71,18 @@ type pingEvent struct {
 }
 
 type metricsEvent struct {
-	Type       string             `json:"type"`
-	NodeID     string             `json:"nodeId"`
-	AgentToken string             `json:"agentToken"`
-	Timestamp  string             `json:"timestamp"`
-	CPU        api.CPUStats       `json:"cpu"`
-	Memory     api.MemoryStats    `json:"memory"`
-	Disk       api.DiskStats      `json:"disk"`
-	Networks   []api.NetworkStats `json:"networks"`
+	Type         string             `json:"type"`
+	NodeID       string             `json:"nodeId"`
+	AgentToken   string             `json:"agentToken"`
+	Timestamp    string             `json:"timestamp"`
+	CPUUsage     *float64           `json:"cpuUsage,omitempty"`
+	MemoryUsage  *float64           `json:"memoryUsage,omitempty"`
+	DiskUsage    *float64           `json:"diskUsage,omitempty"`
+	NetworkStats []api.NetworkStats `json:"networkStats,omitempty"`
+	CPU          api.CPUStats       `json:"cpu"`
+	Memory       api.MemoryStats    `json:"memory"`
+	Disk         api.DiskStats      `json:"disk"`
+	Networks     []api.NetworkStats `json:"networks"`
 }
 
 type taskAcceptedEvent struct {
@@ -102,10 +109,22 @@ type taskCompletedEvent struct {
 	Type       string `json:"type"`
 	TaskID     string `json:"taskId"`
 	Status     string `json:"status"`
+	Result     any    `json:"result,omitempty"`
+	Output     string `json:"output,omitempty"`
 	ExitCode   int    `json:"exitCode"`
 	Error      string `json:"error,omitempty"`
 	DurationMS int64  `json:"durationMs"`
 	Timestamp  string `json:"timestamp"`
+}
+
+type authAckEvent struct {
+	Authenticated bool   `json:"authenticated"`
+	NodeID        string `json:"nodeId,omitempty"`
+}
+
+type authErrorEvent struct {
+	Message string `json:"message,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 func formatTimestampUTCMillis(value time.Time) string {

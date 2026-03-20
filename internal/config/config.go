@@ -21,6 +21,8 @@ const (
 	defaultRealtimePing      = 2 * time.Second
 	defaultRealtimeQueueSize = 1024
 	defaultRealtimeJitter    = 0.2
+	defaultRealtimeNamespace = "/agent-realtime"
+	defaultRealtimePath      = "/socket.io/"
 	defaultStateFile         = "./data/agent_identity.json"
 	configMirrorEnv          = "NODERAX_CONFIG_MIRROR_FILE"
 )
@@ -40,6 +42,8 @@ type Config struct {
 	RealtimePingInterval  time.Duration
 	RealtimeQueueSize     int
 	RealtimeBackoffJitter float64
+	RealtimeNamespace     string
+	RealtimePath          string
 	StateFile             string
 	ConfigFile            string
 	LogLevel              string
@@ -60,6 +64,8 @@ type fileConfig struct {
 	RealtimePingInterval  string   `json:"realtime_ping_interval,omitempty"`
 	RealtimeQueueSize     *int     `json:"realtime_queue_size,omitempty"`
 	RealtimeBackoffJitter *float64 `json:"realtime_backoff_jitter,omitempty"`
+	RealtimeNamespace     string   `json:"realtime_namespace,omitempty"`
+	RealtimePath          string   `json:"realtime_path,omitempty"`
 	StateFile             string   `json:"state_file"`
 	LogLevel              string   `json:"log_level"`
 }
@@ -76,6 +82,8 @@ func Default() Config {
 		RealtimePingInterval:  defaultRealtimePing,
 		RealtimeQueueSize:     defaultRealtimeQueueSize,
 		RealtimeBackoffJitter: defaultRealtimeJitter,
+		RealtimeNamespace:     defaultRealtimeNamespace,
+		RealtimePath:          defaultRealtimePath,
 		StateFile:             defaultStateFile,
 		LogLevel:              "info",
 	}
@@ -143,6 +151,8 @@ func SaveFile(path string, cfg Config) error {
 		RealtimePingInterval:  cfg.RealtimePingInterval.String(),
 		RealtimeQueueSize:     &realtimeQueueSize,
 		RealtimeBackoffJitter: &realtimeBackoffJitter,
+		RealtimeNamespace:     cfg.RealtimeNamespace,
+		RealtimePath:          cfg.RealtimePath,
 		StateFile:             cfg.StateFile,
 		LogLevel:              cfg.LogLevel,
 	}
@@ -212,6 +222,18 @@ func (c Config) Validate() error {
 	}
 	if c.RealtimeBackoffJitter < 0 || c.RealtimeBackoffJitter > 1 {
 		return fmt.Errorf("REALTIME_BACKOFF_JITTER must be between 0 and 1")
+	}
+	if strings.TrimSpace(c.RealtimeNamespace) == "" {
+		return fmt.Errorf("REALTIME_NAMESPACE must not be empty")
+	}
+	if !strings.HasPrefix(c.RealtimeNamespace, "/") {
+		return fmt.Errorf("REALTIME_NAMESPACE must start with '/', got %q", c.RealtimeNamespace)
+	}
+	if strings.TrimSpace(c.RealtimePath) == "" {
+		return fmt.Errorf("REALTIME_PATH must not be empty")
+	}
+	if !strings.HasPrefix(c.RealtimePath, "/") {
+		return fmt.Errorf("REALTIME_PATH must start with '/', got %q", c.RealtimePath)
 	}
 	if strings.TrimSpace(c.StateFile) == "" {
 		return fmt.Errorf("STATE_FILE must not be empty")
@@ -283,6 +305,12 @@ func mergeConfigFile(cfg *Config, path string) error {
 	if raw.RealtimeBackoffJitter != nil {
 		cfg.RealtimeBackoffJitter = *raw.RealtimeBackoffJitter
 	}
+	if raw.RealtimeNamespace != "" {
+		cfg.RealtimeNamespace = raw.RealtimeNamespace
+	}
+	if raw.RealtimePath != "" {
+		cfg.RealtimePath = raw.RealtimePath
+	}
 
 	if err := applyDuration(&cfg.HeartbeatInterval, "heartbeat_interval", raw.HeartbeatInterval); err != nil {
 		return err
@@ -310,12 +338,14 @@ func mergeConfigFile(cfg *Config, path string) error {
 }
 
 func mergeEnv(cfg *Config) error {
-	overrideString(&cfg.APIURL, "API_URL")
+	overrideStringAny(&cfg.APIURL, "NODERAX_API_URL", "API_URL")
 	overrideString(&cfg.EnrollmentToken, "ENROLLMENT_TOKEN")
 	overrideString(&cfg.NodeID, "NODE_ID")
 	overrideString(&cfg.AgentToken, "AGENT_TOKEN")
 	overrideString(&cfg.StateFile, "STATE_FILE")
 	overrideString(&cfg.LogLevel, "LOG_LEVEL")
+	overrideStringAny(&cfg.RealtimeNamespace, "NODERAX_REALTIME_NAMESPACE", "REALTIME_NAMESPACE")
+	overrideStringAny(&cfg.RealtimePath, "NODERAX_REALTIME_PATH", "REALTIME_PATH")
 	if err := overrideBool(&cfg.RealtimeEnabled, "REALTIME_ENABLED"); err != nil {
 		return err
 	}
@@ -323,7 +353,7 @@ func mergeEnv(cfg *Config) error {
 	if err := overrideDuration(&cfg.HeartbeatInterval, "HEARTBEAT_INTERVAL"); err != nil {
 		return err
 	}
-	if err := overrideDuration(&cfg.MetricsInterval, "METRICS_INTERVAL"); err != nil {
+	if err := overrideDurationAny(&cfg.MetricsInterval, "NODERAX_REALTIME_METRICS_INTERVAL", "METRICS_INTERVAL"); err != nil {
 		return err
 	}
 	if err := overrideDuration(&cfg.TaskPollInterval, "TASK_POLL_INTERVAL"); err != nil {
@@ -338,7 +368,7 @@ func mergeEnv(cfg *Config) error {
 	if err := overrideDuration(&cfg.ShutdownTimeout, "SHUTDOWN_TIMEOUT"); err != nil {
 		return err
 	}
-	if err := overrideDuration(&cfg.RealtimePingInterval, "REALTIME_PING_INTERVAL"); err != nil {
+	if err := overrideDurationAny(&cfg.RealtimePingInterval, "NODERAX_REALTIME_PING_INTERVAL", "REALTIME_PING_INTERVAL"); err != nil {
 		return err
 	}
 	if err := overrideInt(&cfg.RealtimeQueueSize, "REALTIME_QUEUE_SIZE"); err != nil {
@@ -350,6 +380,17 @@ func mergeEnv(cfg *Config) error {
 
 	if cfg.StateFile != "" {
 		cfg.StateFile = filepath.Clean(cfg.StateFile)
+	}
+	if cfg.RealtimeNamespace != "" && !strings.HasPrefix(cfg.RealtimeNamespace, "/") {
+		cfg.RealtimeNamespace = "/" + cfg.RealtimeNamespace
+	}
+	if cfg.RealtimePath != "" {
+		if !strings.HasPrefix(cfg.RealtimePath, "/") {
+			cfg.RealtimePath = "/" + cfg.RealtimePath
+		}
+		if !strings.HasSuffix(cfg.RealtimePath, "/") {
+			cfg.RealtimePath += "/"
+		}
 	}
 
 	return nil
@@ -373,12 +414,32 @@ func overrideString(target *string, key string) {
 	}
 }
 
+func overrideStringAny(target *string, keys ...string) {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			*target = value
+			return
+		}
+	}
+}
+
 func overrideDuration(target *time.Duration, key string) error {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
 		return nil
 	}
 	return applyDuration(target, key, value)
+}
+
+func overrideDurationAny(target *time.Duration, keys ...string) error {
+	for _, key := range keys {
+		value := strings.TrimSpace(os.Getenv(key))
+		if value == "" {
+			continue
+		}
+		return applyDuration(target, key, value)
+	}
+	return nil
 }
 
 func overrideBool(target *bool, key string) error {
@@ -450,5 +511,5 @@ func normalizeAPIURL(raw string) string {
 		return strings.TrimRight(value, "/")
 	}
 
-	return strings.TrimRight("http://"+value, "/")
+	return strings.TrimRight("https://"+value, "/")
 }

@@ -152,8 +152,39 @@ Supported config keys:
 - `shutdown_timeout`
 - `realtime_enabled`
 - `realtime_ping_interval`
+- `realtime_namespace`
+- `realtime_path`
 - `state_file`
 - `log_level`
+
+## Realtime Socket.IO v4
+
+Required environment variables for realtime mode:
+
+```bash
+NODERAX_API_URL=https://<domain>
+NODERAX_REALTIME_NAMESPACE=/agent-realtime
+NODERAX_REALTIME_PATH=/socket.io/
+NODERAX_REALTIME_PING_INTERVAL=10s
+NODERAX_REALTIME_METRICS_INTERVAL=3s
+```
+
+Notes:
+
+- Auth is performed after socket connection with the `agent.auth` event.
+- Namespace and Engine.IO path are configured separately.
+- Realtime startup performs a self-check with `GET {baseURL}/socket.io/?EIO=4&transport=polling` and expects a `sid` in response.
+
+Common failure modes:
+
+- `invalid URL input`:
+  `NODERAX_API_URL` is malformed or missing host.
+- `tls/proxy handshake failure`:
+  TLS certificate/proxy setup issue between agent and API.
+- `namespace connect failure`:
+  wrong namespace or Socket.IO path mismatch.
+- `auth error`:
+  `agent.auth` payload rejected by backend.
 
 ## Enrollment Flow
 

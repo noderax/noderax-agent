@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/rand"
 	"net/http"
@@ -19,7 +20,10 @@ import (
 	"github.com/noderax/noderax-agent/internal/api"
 )
 
-var reconnectDelays = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
+const (
+	defaultRealtimeNamespace = "/agent-realtime"
+	defaultRealtimePath      = "/socket.io/"
+)
 
 type AuthSuccessHook func(context.Context)
 
@@ -43,7 +47,10 @@ type Service struct {
 	credentials    func() (string, string)
 	dispatcher     *dispatcher
 	onAuthSuccess  AuthSuccessHook
-	baseURL        string
+	dialURL        string
+	healthURL      string
+	namespace      string
+	path           string
 	outbound       chan any
 
 	reconnects      atomic.Int64
@@ -55,6 +62,7 @@ type Service struct {
 	queueDepth      atomic.Int64
 	maxQueueDepth   atomic.Int64
 	dispatchHandled atomic.Int64
+	selfChecked     atomic.Bool
 }
 
 type socketIOConn struct {
@@ -65,6 +73,8 @@ type socketIOConn struct {
 
 func NewService(
 	apiURL string,
+	namespace string,
+	path string,
 	requestTimeout time.Duration,
 	pingInterval time.Duration,
 	queueSize int,
@@ -74,7 +84,7 @@ func NewService(
 	handler taskDispatcher,
 	onAuthSuccess AuthSuccessHook,
 ) (*Service, error) {
-	baseURL, err := realtimeEndpoint(apiURL)
+	target, err := normalizeRealtimeTarget(apiURL, namespace, path)
 	if err != nil {
 		return nil, err
 	}
@@ -99,16 +109,28 @@ func NewService(
 		credentials:    credentials,
 		dispatcher:     newDispatcher(handler),
 		onAuthSuccess:  onAuthSuccess,
-		baseURL:        baseURL,
+		dialURL:        target.DialURL,
+		healthURL:      target.HealthURL,
+		namespace:      target.Namespace,
+		path:           target.Path,
 		outbound:       make(chan any, queueSize),
 	}, nil
 }
 
 func (s *Service) Run(ctx context.Context) error {
-	retryIndex := 0
+	attempt := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil
+		}
+
+		if !s.selfChecked.Load() {
+			if err := s.preflightCheck(ctx); err != nil {
+				s.logger.Warn("realtime startup self-check failed", "error", err, "health_url", s.healthURL)
+			} else {
+				s.logger.Info("realtime startup self-check passed", "health_url", s.healthURL)
+			}
+			s.selfChecked.Store(true)
 		}
 
 		client, err := s.connect(ctx)
@@ -116,18 +138,16 @@ func (s *Service) Run(ctx context.Context) error {
 			s.logger.Warn("realtime connect failed", "error", err)
 			s.reconnects.Add(1)
 
-			delay := applyJitter(reconnectDelays[minInt(retryIndex, len(reconnectDelays)-1)], s.jitterRatio)
+			delay := backoffDelay(attempt, s.jitterRatio)
 			if !sleepWithContext(ctx, delay) {
 				return nil
 			}
-			if retryIndex < len(reconnectDelays)-1 {
-				retryIndex++
-			}
+			attempt++
 			continue
 		}
 
-		retryIndex = 0
-		s.logger.Info("realtime socket.io connected", "url", s.baseURL)
+		attempt = 0
+		s.logger.Info("realtime socket.io connected", "url", s.dialURL, "namespace", s.namespace, "path", s.path)
 
 		err = s.runConnection(ctx, client)
 		if err == nil || errors.Is(err, context.Canceled) {
@@ -137,13 +157,11 @@ func (s *Service) Run(ctx context.Context) error {
 		s.logger.Warn("realtime socket.io connection closed", "error", err)
 		s.reconnects.Add(1)
 
-		delay := applyJitter(reconnectDelays[minInt(retryIndex, len(reconnectDelays)-1)], s.jitterRatio)
+		delay := backoffDelay(attempt, s.jitterRatio)
 		if !sleepWithContext(ctx, delay) {
 			return nil
 		}
-		if retryIndex < len(reconnectDelays)-1 {
-			retryIndex++
-		}
+		attempt++
 	}
 }
 
@@ -202,15 +220,22 @@ func (s *Service) TaskCompleted(ctx context.Context, event api.CompleteTaskReque
 }
 
 func (s *Service) SendMetrics(ctx context.Context, event api.MetricsRequest) error {
+	cpuUsage := event.CPU.UsagePercent
+	memoryUsage := event.Memory.UsedPercent
+	diskUsage := event.Disk.UsedPercent
 	err := s.enqueueCritical(ctx, metricsEvent{
-		Type:       EventAgentMetrics,
-		NodeID:     event.NodeID,
-		AgentToken: event.AgentToken,
-		Timestamp:  formatTimestampUTCMillis(event.CollectedAt),
-		CPU:        event.CPU,
-		Memory:     event.Memory,
-		Disk:       event.Disk,
-		Networks:   event.Networks,
+		Type:         EventAgentMetrics,
+		NodeID:       event.NodeID,
+		AgentToken:   event.AgentToken,
+		Timestamp:    formatTimestampUTCMillis(event.CollectedAt),
+		CPUUsage:     &cpuUsage,
+		MemoryUsage:  &memoryUsage,
+		DiskUsage:    &diskUsage,
+		NetworkStats: event.Networks,
+		CPU:          event.CPU,
+		Memory:       event.Memory,
+		Disk:         event.Disk,
+		Networks:     event.Networks,
 	})
 	if err == nil {
 		s.metricsSent.Add(1)
@@ -246,21 +271,21 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 		return nil, fmt.Errorf("agent credentials are missing")
 	}
 
-	reqHeader := transport.NewRequestHeader(http.Header{})
-	reqHeader.Set("Authorization", "Bearer "+agentToken)
-
 	randomization := float32(s.jitterRatio)
-	manager := sio.NewManager(s.baseURL, &sio.ManagerConfig{
+	s.logger.Info("realtime dial attempt", "base_url", s.dialURL, "namespace", s.namespace, "path", s.path, "transport_mode", "polling,websocket")
+
+	reqHeader := transport.NewRequestHeader(http.Header{})
+	manager := sio.NewManager(s.dialURL, &sio.ManagerConfig{
 		NoReconnection:      true,
 		RandomizationFactor: &randomization,
 		EIO: eio.ClientConfig{
-			Transports:    []string{"websocket"},
+			Transports:    []string{"polling", "websocket"},
 			RequestHeader: reqHeader,
 		},
 	})
-	socket := manager.Socket("/agent-realtime", &sio.ClientSocketConfig{})
+	socket := manager.Socket(s.namespace, &sio.ClientSocketConfig{})
 
-	connectedCh := make(chan struct{}, 1)
+	authOKCh := make(chan struct{}, 1)
 	connectErrCh := make(chan error, 1)
 	disconnectCh := make(chan error, 1)
 
@@ -302,15 +327,53 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 	socket.OnConnect(func() {
 		authPayload := authEvent{Type: EventAgentAuth, NodeID: nodeID, AgentToken: agentToken}
 		socket.Emit(EventAgentAuth, authPayload)
+	})
+
+	socket.OnEvent(EventAgentAuthAck, func(payload map[string]any) {
+		ack := authAckEvent{}
+		if bytes, err := json.Marshal(payload); err == nil {
+			_ = json.Unmarshal(bytes, &ack)
+		}
+		if !ack.Authenticated {
+			select {
+			case connectErrCh <- fmt.Errorf("auth error: server returned authenticated=false"):
+			default:
+			}
+			return
+		}
+		s.logger.Info("realtime auth acknowledged", "node_id", ack.NodeID)
 		s.onAuthSuccess(ctx)
 		select {
-		case connectedCh <- struct{}{}:
+		case authOKCh <- struct{}{}:
 		default:
 		}
 	})
+
+	socket.OnEvent(EventAgentAuthErr, func(payload map[string]any) {
+		authErr := authErrorEvent{}
+		if bytes, err := json.Marshal(payload); err == nil {
+			_ = json.Unmarshal(bytes, &authErr)
+		}
+		msg := strings.TrimSpace(authErr.Message)
+		if msg == "" {
+			msg = strings.TrimSpace(authErr.Error)
+		}
+		if msg == "" {
+			msg = "unknown auth error"
+		}
+		select {
+		case connectErrCh <- fmt.Errorf("auth error: %s", msg):
+		default:
+		}
+	})
+
+	socket.OnEvent(EventAgentError, func(payload map[string]any) {
+		s.logger.Warn("received realtime agent.error", "payload", payload)
+	})
+
 	socket.OnConnectError(func(err any) {
 		select {
-		case connectErrCh <- fmt.Errorf("socket.io connect error: %v", err):
+		case connectErrCh <- fmt.Errorf("namespace connect failure: %v", err):
 		default:
 		}
 	})
@@ -322,7 +385,7 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 	})
 	manager.OnError(func(err error) {
 		select {
-		case connectErrCh <- fmt.Errorf("socket.io manager error: %w", err):
+		case connectErrCh <- classifyDialError(err):
 		default:
 		}
 	})
@@ -349,11 +412,11 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 		return nil, ctx.Err()
 	case <-timeout.C:
 		manager.Close()
-		return nil, fmt.Errorf("dial socket.io failed: connect timeout after %s", connectTimeout)
+		return nil, fmt.Errorf("dial socket.io failed: namespace auth timeout after %s", connectTimeout)
 	case err := <-connectErrCh:
 		manager.Close()
 		return nil, fmt.Errorf("dial socket.io failed: %w", err)
-	case <-connectedCh:
+	case <-authOKCh:
 		return &socketIOConn{manager: manager, socket: socket, disconnectCh: disconnectCh}, nil
 	}
 }
@@ -464,20 +527,116 @@ func (s *Service) updateQueueDepth(delta int64) {
 	}
 }
 
-func realtimeEndpoint(apiURL string) (string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(apiURL))
+type realtimeTarget struct {
+	DialURL   string
+	HealthURL string
+	Namespace string
+	Path      string
+}
+
+func normalizeRealtimeTarget(apiURL, namespace, path string) (realtimeTarget, error) {
+	trimmed := strings.TrimSpace(apiURL)
+	if trimmed == "" {
+		return realtimeTarget{}, fmt.Errorf("API_URL is required")
+	}
+	if !strings.Contains(trimmed, "://") {
+		trimmed = "https://" + trimmed
+	}
+
+	parsed, err := url.Parse(trimmed)
 	if err != nil {
-		return "", fmt.Errorf("parse API_URL for realtime endpoint: %w", err)
+		return realtimeTarget{}, fmt.Errorf("invalid URL input: %w", err)
 	}
-
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", fmt.Errorf("API_URL has unsupported scheme for socket.io endpoint: %q", parsed.Scheme)
+		return realtimeTarget{}, fmt.Errorf("invalid URL input: unsupported scheme %q", parsed.Scheme)
+	}
+	if parsed.Host == "" {
+		return realtimeTarget{}, fmt.Errorf("invalid URL input: missing host")
 	}
 
-	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/socket.io"
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	return parsed.String(), nil
+	if strings.TrimSpace(namespace) == "" {
+		namespace = defaultRealtimeNamespace
+	}
+	if !strings.HasPrefix(namespace, "/") {
+		namespace = "/" + namespace
+	}
+
+	if strings.TrimSpace(path) == "" {
+		path = defaultRealtimePath
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	if !strings.HasSuffix(path, "/") {
+		path += "/"
+	}
+
+	base := &url.URL{Scheme: parsed.Scheme, Host: parsed.Host}
+	dial := *base
+	dial.Path = path
+
+	health := *base
+	health.Path = path
+	q := health.Query()
+	q.Set("EIO", "4")
+	q.Set("transport", "polling")
+	health.RawQuery = q.Encode()
+
+	return realtimeTarget{
+		DialURL:   dial.String(),
+		HealthURL: health.String(),
+		Namespace: namespace,
+		Path:      path,
+	}, nil
+}
+
+func (s *Service) preflightCheck(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.healthURL, nil)
+	if err != nil {
+		return fmt.Errorf("build self-check request: %w", err)
+	}
+
+	client := &http.Client{Timeout: s.requestTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("self-check request failed: %w", classifyDialError(err))
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	text := string(body)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(text, "\"sid\"") {
+		return fmt.Errorf("self-check failed: status=%d body=%q (expected Socket.IO handshake with sid)", resp.StatusCode, text)
+	}
+	return nil
+}
+
+func classifyDialError(err error) error {
+	if err == nil {
+		return nil
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "invalid input") || strings.Contains(message, "invalid url"):
+		return fmt.Errorf("invalid URL input: %w", err)
+	case strings.Contains(message, "tls") || strings.Contains(message, "certificate") || strings.Contains(message, "x509"):
+		return fmt.Errorf("tls/proxy handshake failure: %w", err)
+	case strings.Contains(message, "connect error") || strings.Contains(message, "namespace"):
+		return fmt.Errorf("namespace connect failure: %w", err)
+	default:
+		return fmt.Errorf("transport dial failure: %w", err)
+	}
+}
+
+func backoffDelay(attempt int, jitterRatio float64) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	base := time.Second << minInt(attempt, 5)
+	if base > 30*time.Second {
+		base = 30 * time.Second
+	}
+	return applyJitter(base, jitterRatio)
 }
 
 func applyJitter(base time.Duration, ratio float64) time.Duration {
