@@ -119,6 +119,7 @@ func NewService(
 
 func (s *Service) Run(ctx context.Context) error {
 	attempt := 0
+	preferPollingOnly := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil
@@ -133,7 +134,7 @@ func (s *Service) Run(ctx context.Context) error {
 			s.selfChecked.Store(true)
 		}
 
-		client, err := s.connect(ctx)
+		client, err := s.connect(ctx, preferPollingOnly)
 		if err != nil {
 			s.logger.Warn("realtime connect failed", "error", err)
 			s.reconnects.Add(1)
@@ -152,6 +153,11 @@ func (s *Service) Run(ctx context.Context) error {
 		err = s.runConnection(ctx, client)
 		if err == nil || errors.Is(err, context.Canceled) {
 			return nil
+		}
+
+		preferPollingOnly = strings.Contains(strings.ToLower(err.Error()), "transport close")
+		if preferPollingOnly {
+			s.logger.Warn("realtime transport degraded; next reconnect will use polling-only", "error", err)
 		}
 
 		s.logger.Warn("realtime socket.io connection closed", "error", err)
@@ -265,21 +271,27 @@ func (s *Service) SnapshotStats() Stats {
 	}
 }
 
-func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
+func (s *Service) connect(ctx context.Context, pollingOnly bool) (*socketIOConn, error) {
 	nodeID, agentToken := s.credentials()
 	if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(agentToken) == "" {
 		return nil, fmt.Errorf("agent credentials are missing")
 	}
 
 	randomization := float32(s.jitterRatio)
-	s.logger.Info("realtime dial attempt", "base_url", s.dialURL, "namespace", s.namespace, "path", s.path, "transport_mode", "polling,websocket")
+	transportMode := "polling,websocket"
+	transports := []string{"polling", "websocket"}
+	if pollingOnly {
+		transportMode = "polling"
+		transports = []string{"polling"}
+	}
+	s.logger.Info("realtime dial attempt", "base_url", s.dialURL, "namespace", s.namespace, "path", s.path, "transport_mode", transportMode)
 
 	reqHeader := transport.NewRequestHeader(http.Header{})
 	manager := sio.NewManager(s.dialURL, &sio.ManagerConfig{
 		NoReconnection:      true,
 		RandomizationFactor: &randomization,
 		EIO: eio.ClientConfig{
-			Transports:    []string{"polling", "websocket"},
+			Transports:    transports,
 			RequestHeader: reqHeader,
 		},
 	})
