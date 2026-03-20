@@ -41,6 +41,8 @@ The installer auto-detects the current OS and then:
 - install the agent as a background service
 - start it automatically in the background
 
+When you run the installer from a source checkout, it also mirrors the entered values into the repository-level `config.json` for local visibility. The managed service still reads its OS-specific config path shown below.
+
 ### Ubuntu
 
 Installed paths on Ubuntu:

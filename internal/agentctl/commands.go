@@ -170,11 +170,7 @@ func (c CLI) Install(ctx context.Context) error {
 		return err
 	}
 
-	_, _ = fmt.Fprintf(c.stdoutOrDefault(), "\nInstall completed.\n")
-	_, _ = fmt.Fprintf(c.stdoutOrDefault(), "Service: %s\n", spec.ServiceName)
-	_, _ = fmt.Fprintf(c.stdoutOrDefault(), "Binary: %s\n", spec.BinaryPath)
-	_, _ = fmt.Fprintf(c.stdoutOrDefault(), "Config: %s\n", cfg.ConfigFile)
-	_, _ = fmt.Fprintf(c.stdoutOrDefault(), "State: %s\n", cfg.StateFile)
+	_, _ = fmt.Fprint(c.stdoutOrDefault(), renderInstallSummary(spec, cfg, c.Version, mirroredConfigPath(cfg.ConfigFile)))
 	return nil
 }
 
@@ -449,6 +445,85 @@ func renderLaunchdPlist(spec platformSpec, configPath string) string {
   </dict>
 </plist>
 `, spec.ServiceName, spec.BinaryPath, configPath, spec.WorkingDir, spec.LogStdoutPath, spec.LogStderrPath)
+}
+
+func renderInstallSummary(spec platformSpec, cfg config.Config, version, localConfigPath string) string {
+	var builder strings.Builder
+
+	builder.WriteString("\n")
+	builder.WriteString("========================================\n")
+	builder.WriteString(" Noderax Agent Ready\n")
+	builder.WriteString("========================================\n")
+	fmt.Fprintf(&builder, "Status       : running in the background\n")
+	fmt.Fprintf(&builder, "Platform     : %s (%s)\n", runtime.GOOS, spec.Manager)
+	if strings.TrimSpace(version) != "" {
+		fmt.Fprintf(&builder, "Version      : %s\n", strings.TrimSpace(version))
+	}
+	fmt.Fprintf(&builder, "Service      : %s\n", spec.ServiceName)
+	fmt.Fprintf(&builder, "API URL      : %s\n", cfg.APIURL)
+	fmt.Fprintf(&builder, "Binary       : %s\n", spec.BinaryPath)
+	fmt.Fprintf(&builder, "Config       : %s\n", cfg.ConfigFile)
+	if strings.TrimSpace(localConfigPath) != "" {
+		fmt.Fprintf(&builder, "Local config : %s\n", localConfigPath)
+	}
+	fmt.Fprintf(&builder, "State        : %s\n", cfg.StateFile)
+	fmt.Fprintf(&builder, "Logs         : %s\n", logHintForSummary(spec))
+
+	builder.WriteString("\n")
+	builder.WriteString("Commands\n")
+	fmt.Fprintf(&builder, "  start   %s\n", serviceCommandForSummary("start"))
+	fmt.Fprintf(&builder, "  stop    %s\n", serviceCommandForSummary("stop"))
+	fmt.Fprintf(&builder, "  restart %s\n", serviceCommandForSummary("restart"))
+	fmt.Fprintf(&builder, "  status  %s\n", serviceCommandForSummary("status"))
+	fmt.Fprintf(&builder, "  config  %s\n", configShowCommandForSummary())
+	fmt.Fprintf(&builder, "  update  %s\n", configSetCommandForSummary())
+
+	builder.WriteString("\n")
+	builder.WriteString("Notes\n")
+	builder.WriteString("  The service was started automatically during install.\n")
+	builder.WriteString("  Use the commands above whenever you want to manage it again.\n")
+
+	return builder.String()
+}
+
+func mirroredConfigPath(managedConfigPath string) string {
+	mirrorPath := strings.TrimSpace(os.Getenv("NODERAX_CONFIG_MIRROR_FILE"))
+	if mirrorPath == "" {
+		return ""
+	}
+
+	mirrorPath = filepath.Clean(mirrorPath)
+	if mirrorPath == filepath.Clean(managedConfigPath) {
+		return ""
+	}
+
+	return mirrorPath
+}
+
+func serviceCommandForSummary(action string) string {
+	return "sudo noderax-agent " + strings.TrimSpace(action)
+}
+
+func configShowCommandForSummary() string {
+	return "sudo noderax-agent config show"
+}
+
+func configSetCommandForSummary() string {
+	return "sudo noderax-agent config set api_url https://api.example.com"
+}
+
+func logHintForSummary(spec platformSpec) string {
+	switch spec.Manager {
+	case serviceManagerSystemd:
+		return "sudo journalctl -u " + spec.ServiceName + " -f"
+	case serviceManagerLaunchd:
+		if strings.TrimSpace(spec.LogStdoutPath) != "" {
+			return "sudo tail -f " + spec.LogStdoutPath
+		}
+		return "sudo launchctl print " + launchdTarget(spec)
+	default:
+		return "noderax-agent status"
+	}
 }
 
 func copyExecutable(src, dst string) error {

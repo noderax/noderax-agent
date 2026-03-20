@@ -18,6 +18,7 @@ const (
 	defaultTaskTimeout       = 10 * time.Minute
 	defaultShutdownTimeout   = 20 * time.Second
 	defaultStateFile         = "./data/agent_identity.json"
+	configMirrorEnv          = "NODERAX_CONFIG_MIRROR_FILE"
 )
 
 type Config struct {
@@ -132,8 +133,17 @@ func SaveFile(path string, cfg Config) error {
 		return fmt.Errorf("encode config file %s: %w", path, err)
 	}
 
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("write config file %s: %w", path, err)
+	if err := writeConfigFile(path, data); err != nil {
+		return err
+	}
+
+	if mirrorPath := strings.TrimSpace(os.Getenv(configMirrorEnv)); mirrorPath != "" {
+		mirrorPath = filepath.Clean(mirrorPath)
+		if mirrorPath != filepath.Clean(path) {
+			if err := writeConfigFile(mirrorPath, data); err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
@@ -284,6 +294,18 @@ func mergeEnv(cfg *Config) error {
 
 	if cfg.StateFile != "" {
 		cfg.StateFile = filepath.Clean(cfg.StateFile)
+	}
+
+	return nil
+}
+
+func writeConfigFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config directory for %s: %w", path, err)
+	}
+
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("write config file %s: %w", path, err)
 	}
 
 	return nil

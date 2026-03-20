@@ -28,4 +28,10 @@ if [[ ! -x "$AGENT_BIN" ]]; then
   go build -o "$AGENT_BIN" ./cmd/agent
 fi
 
-exec "$AGENT_BIN" install "$@"
+export NODERAX_CONFIG_MIRROR_FILE="${NODERAX_CONFIG_MIRROR_FILE:-$ROOT_DIR/config.json}"
+
+"$AGENT_BIN" install "$@"
+
+if [[ -n "${SUDO_UID:-}" && -n "${SUDO_GID:-}" && -f "$NODERAX_CONFIG_MIRROR_FILE" ]]; then
+  chown "$SUDO_UID:$SUDO_GID" "$NODERAX_CONFIG_MIRROR_FILE"
+fi
