@@ -1,6 +1,8 @@
 package agentctl
 
 import (
+	"bytes"
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -85,5 +87,26 @@ func TestRenderLaunchdPlist(t *testing.T) {
 	}
 	if !strings.Contains(plist, "<string>"+macOSConfigPath+"</string>") {
 		t.Fatalf("launchd plist is missing config path: %s", plist)
+	}
+}
+
+func TestHandlePrintsLogoForManagedCommands(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	cli := CLI{
+		Stdout: &stdout,
+		Stderr: &stdout,
+	}
+
+	handled, err := cli.Handle(context.Background(), []string{"config"})
+	if !handled {
+		t.Fatal("expected config command to be handled")
+	}
+	if err == nil {
+		t.Fatal("expected usage error for missing config subcommand")
+	}
+	if !strings.Contains(stdout.String(), "→→") {
+		t.Fatalf("expected logo to be printed, got %q", stdout.String())
 	}
 }

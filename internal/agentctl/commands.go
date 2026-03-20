@@ -15,6 +15,7 @@ import (
 
 	"github.com/noderax/noderax-agent/internal/agent"
 	"github.com/noderax/noderax-agent/internal/api"
+	"github.com/noderax/noderax-agent/internal/brand"
 	"github.com/noderax/noderax-agent/internal/config"
 )
 
@@ -70,10 +71,13 @@ func (c CLI) Handle(ctx context.Context, args []string) (bool, error) {
 
 	switch args[0] {
 	case "install":
+		brand.PrintLogo(c.stdoutOrDefault())
 		return true, c.Install(ctx)
 	case "start", "stop", "restart", "status":
+		brand.PrintLogo(c.stdoutOrDefault())
 		return true, c.ServiceAction(ctx, args[0])
 	case "config":
+		brand.PrintLogo(c.stdoutOrDefault())
 		return true, c.Config(ctx, args[1:])
 	default:
 		return false, nil

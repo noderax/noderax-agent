@@ -34,10 +34,6 @@ func main() {
 	cliCtx, cliStop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cliStop()
 
-	if len(os.Args) > 1 {
-		brand.PrintLogo(os.Stdout)
-	}
-
 	if handled, err := cli.Handle(cliCtx, os.Args[1:]); handled {
 		if err != nil {
 			baseLog.Error("command failed", "error", err)
@@ -63,6 +59,8 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "enroll" {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
+
+		brand.PrintLogo(os.Stdout)
 
 		if err := agent.RunInteractiveEnrollment(ctx, cfg, client, log, version, os.Stdin, os.Stdout); err != nil {
 			log.Error("interactive enrollment failed", "error", err)
