@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"github.com/noderax/noderax-agent/internal/api"
+	"github.com/noderax/noderax-agent/internal/realtime"
 	"github.com/noderax/noderax-agent/internal/system"
 )
 
 type Service struct {
-	client         *api.Client
+	realtime       *realtime.Service
 	logger         *slog.Logger
 	interval       time.Duration
 	requestTimeout time.Duration
@@ -20,14 +21,14 @@ type Service struct {
 }
 
 func NewService(
-	client *api.Client,
+	realtime *realtime.Service,
 	logger *slog.Logger,
 	interval time.Duration,
 	requestTimeout time.Duration,
 	credentials func() (string, string),
 ) *Service {
 	return &Service{
-		client:         client,
+		realtime:       realtime,
 		logger:         logger,
 		interval:       interval,
 		requestTimeout: requestTimeout,
@@ -53,6 +54,11 @@ func (s *Service) Run(ctx context.Context) error {
 }
 
 func (s *Service) collectAndSend(ctx context.Context) {
+	if s.realtime == nil {
+		s.logger.Error("realtime metrics skipped because realtime client is unavailable")
+		return
+	}
+
 	nodeID, agentToken := s.credentials()
 	if nodeID == "" || agentToken == "" {
 		s.logger.Warn("metrics skipped because agent identity is missing")
@@ -74,7 +80,7 @@ func (s *Service) collectAndSend(ctx context.Context) {
 	requestCtx, cancelRequest := context.WithTimeout(ctx, s.requestTimeout)
 	defer cancelRequest()
 
-	err = s.client.SendMetrics(requestCtx, api.MetricsRequest{
+	err = s.realtime.SendMetrics(requestCtx, api.MetricsRequest{
 		NodeID:      nodeID,
 		AgentToken:  agentToken,
 		CollectedAt: snapshot.CollectedAt,
@@ -101,11 +107,11 @@ func (s *Service) collectAndSend(ctx context.Context) {
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		s.logger.Error("sending metrics failed", "error", err)
+		s.logger.Error("sending realtime metrics failed", "error", err)
 		return
 	}
 
-	s.logger.Info("metrics sent", "node_id", nodeID)
+	s.logger.Info("realtime metrics sent", "node_id", nodeID)
 }
 
 func mapNetworks(items []system.NetworkStats) []api.NetworkStats {

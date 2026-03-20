@@ -3,14 +3,14 @@
 </p>
 <h1 align="center">Noderax Agent</h1>
 
-Noderax Agent is a Go-based node agent that connects servers to the Noderax platform. It enrolls a machine, sends heartbeats and metrics, receives tasks from `noderax-api`, and executes supported operations such as shell commands and package management.
+Noderax Agent is a Go-based node agent that connects servers to the Noderax platform. It enrolls a machine, opens a realtime websocket session, streams metrics, receives task dispatch events from `noderax-api`, and executes supported operations such as shell commands and package management.
 
 ## Highlights
 
 - Enrollment-based node onboarding with short-lived approval tokens
 - Background service support for Ubuntu and macOS
 - Built-in CLI for install, start, stop, restart, status, and config updates
-- Heartbeat, metrics, shell execution, and package management task support
+- Realtime websocket events for metrics and task lifecycle
 - Persistent identity storage for approved nodes
 
 ## Supported Platforms
@@ -134,7 +134,7 @@ Update a config value:
 ```bash
 sudo noderax-agent config set api_url https://api.example.com
 sudo noderax-agent config set task_timeout 30s
-sudo noderax-agent config set task_poll_interval 5s
+sudo noderax-agent config set metrics_interval 15s
 sudo noderax-agent config set log_level debug
 ```
 
@@ -146,12 +146,12 @@ Supported config keys:
 - `enrollment_token`
 - `node_id`
 - `agent_token`
-- `heartbeat_interval`
 - `metrics_interval`
-- `task_poll_interval`
 - `request_timeout`
 - `task_timeout`
 - `shutdown_timeout`
+- `realtime_enabled`
+- `realtime_ping_interval`
 - `state_file`
 - `log_level`
 
@@ -169,7 +169,7 @@ The agent uses the following flow:
 3. Save the returned short-lived token into the config file.
 4. Wait for approval from the web UI via `GET /api/v1/enrollments/{token}`.
 5. Persist the approved `nodeId` and `agentToken`.
-6. Start normal heartbeat, metrics, and task execution loops.
+6. Start realtime websocket session and metrics/task execution loops.
 
 ## Project Structure
 
@@ -177,9 +177,9 @@ The agent uses the following flow:
 - [`internal/agent`](internal/agent): enrollment, identity persistence, and worker bootstrap
 - [`internal/agentctl`](internal/agentctl): install, service management, and config CLI
 - [`internal/api`](internal/api): API request/response models and HTTP client
-- [`internal/tasks`](internal/tasks): task polling and execution
-- [`internal/heartbeat`](internal/heartbeat): heartbeat worker
+- [`internal/tasks`](internal/tasks): realtime task execution
 - [`internal/metrics`](internal/metrics): metrics worker
+- [`internal/realtime`](internal/realtime): websocket realtime client and event handlers
 - [`internal/system`](internal/system): host and system information helpers
 - [`scripts`](scripts): installation entrypoints
 

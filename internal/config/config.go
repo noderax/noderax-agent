@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -17,51 +18,58 @@ const (
 	defaultRequestTimeout    = 10 * time.Second
 	defaultTaskTimeout       = 10 * time.Minute
 	defaultShutdownTimeout   = 20 * time.Second
+	defaultRealtimePing      = 30 * time.Second
 	defaultStateFile         = "./data/agent_identity.json"
 	configMirrorEnv          = "NODERAX_CONFIG_MIRROR_FILE"
 )
 
 type Config struct {
-	APIURL            string
-	EnrollmentToken   string
-	NodeID            string
-	AgentToken        string
-	HeartbeatInterval time.Duration
-	MetricsInterval   time.Duration
-	TaskPollInterval  time.Duration
-	RequestTimeout    time.Duration
-	TaskTimeout       time.Duration
-	ShutdownTimeout   time.Duration
-	StateFile         string
-	ConfigFile        string
-	LogLevel          string
+	APIURL               string
+	EnrollmentToken      string
+	NodeID               string
+	AgentToken           string
+	HeartbeatInterval    time.Duration
+	MetricsInterval      time.Duration
+	TaskPollInterval     time.Duration
+	RequestTimeout       time.Duration
+	TaskTimeout          time.Duration
+	ShutdownTimeout      time.Duration
+	RealtimeEnabled      bool
+	RealtimePingInterval time.Duration
+	StateFile            string
+	ConfigFile           string
+	LogLevel             string
 }
 
 type fileConfig struct {
-	APIURL            string `json:"api_url"`
-	EnrollmentToken   string `json:"enrollment_token"`
-	NodeID            string `json:"node_id"`
-	AgentToken        string `json:"agent_token"`
-	HeartbeatInterval string `json:"heartbeat_interval"`
-	MetricsInterval   string `json:"metrics_interval"`
-	TaskPollInterval  string `json:"task_poll_interval"`
-	RequestTimeout    string `json:"request_timeout"`
-	TaskTimeout       string `json:"task_timeout"`
-	ShutdownTimeout   string `json:"shutdown_timeout"`
-	StateFile         string `json:"state_file"`
-	LogLevel          string `json:"log_level"`
+	APIURL               string `json:"api_url"`
+	EnrollmentToken      string `json:"enrollment_token"`
+	NodeID               string `json:"node_id"`
+	AgentToken           string `json:"agent_token"`
+	HeartbeatInterval    string `json:"heartbeat_interval"`
+	MetricsInterval      string `json:"metrics_interval"`
+	TaskPollInterval     string `json:"task_poll_interval"`
+	RequestTimeout       string `json:"request_timeout"`
+	TaskTimeout          string `json:"task_timeout"`
+	ShutdownTimeout      string `json:"shutdown_timeout"`
+	RealtimeEnabled      *bool  `json:"realtime_enabled,omitempty"`
+	RealtimePingInterval string `json:"realtime_ping_interval,omitempty"`
+	StateFile            string `json:"state_file"`
+	LogLevel             string `json:"log_level"`
 }
 
 func Default() Config {
 	return Config{
-		HeartbeatInterval: defaultHeartbeatInterval,
-		MetricsInterval:   defaultMetricsInterval,
-		TaskPollInterval:  defaultTaskPollInterval,
-		RequestTimeout:    defaultRequestTimeout,
-		TaskTimeout:       defaultTaskTimeout,
-		ShutdownTimeout:   defaultShutdownTimeout,
-		StateFile:         defaultStateFile,
-		LogLevel:          "info",
+		HeartbeatInterval:    defaultHeartbeatInterval,
+		MetricsInterval:      defaultMetricsInterval,
+		TaskPollInterval:     defaultTaskPollInterval,
+		RequestTimeout:       defaultRequestTimeout,
+		TaskTimeout:          defaultTaskTimeout,
+		ShutdownTimeout:      defaultShutdownTimeout,
+		RealtimeEnabled:      true,
+		RealtimePingInterval: defaultRealtimePing,
+		StateFile:            defaultStateFile,
+		LogLevel:             "info",
 	}
 }
 
@@ -109,19 +117,22 @@ func SaveFile(path string, cfg Config) error {
 		return fmt.Errorf("config path must not be empty")
 	}
 
+	realtimeEnabled := cfg.RealtimeEnabled
 	raw := fileConfig{
-		APIURL:            cfg.APIURL,
-		EnrollmentToken:   cfg.EnrollmentToken,
-		NodeID:            cfg.NodeID,
-		AgentToken:        cfg.AgentToken,
-		HeartbeatInterval: cfg.HeartbeatInterval.String(),
-		MetricsInterval:   cfg.MetricsInterval.String(),
-		TaskPollInterval:  cfg.TaskPollInterval.String(),
-		RequestTimeout:    cfg.RequestTimeout.String(),
-		TaskTimeout:       cfg.TaskTimeout.String(),
-		ShutdownTimeout:   cfg.ShutdownTimeout.String(),
-		StateFile:         cfg.StateFile,
-		LogLevel:          cfg.LogLevel,
+		APIURL:               cfg.APIURL,
+		EnrollmentToken:      cfg.EnrollmentToken,
+		NodeID:               cfg.NodeID,
+		AgentToken:           cfg.AgentToken,
+		HeartbeatInterval:    cfg.HeartbeatInterval.String(),
+		MetricsInterval:      cfg.MetricsInterval.String(),
+		TaskPollInterval:     cfg.TaskPollInterval.String(),
+		RequestTimeout:       cfg.RequestTimeout.String(),
+		TaskTimeout:          cfg.TaskTimeout.String(),
+		ShutdownTimeout:      cfg.ShutdownTimeout.String(),
+		RealtimeEnabled:      &realtimeEnabled,
+		RealtimePingInterval: cfg.RealtimePingInterval.String(),
+		StateFile:            cfg.StateFile,
+		LogLevel:             cfg.LogLevel,
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -180,6 +191,9 @@ func (c Config) Validate() error {
 	}
 	if c.ShutdownTimeout <= 0 {
 		return fmt.Errorf("SHUTDOWN_TIMEOUT must be greater than zero")
+	}
+	if c.RealtimePingInterval <= 0 {
+		return fmt.Errorf("REALTIME_PING_INTERVAL must be greater than zero")
 	}
 	if strings.TrimSpace(c.StateFile) == "" {
 		return fmt.Errorf("STATE_FILE must not be empty")
@@ -242,6 +256,9 @@ func mergeConfigFile(cfg *Config, path string) error {
 	if raw.LogLevel != "" {
 		cfg.LogLevel = raw.LogLevel
 	}
+	if raw.RealtimeEnabled != nil {
+		cfg.RealtimeEnabled = *raw.RealtimeEnabled
+	}
 
 	if err := applyDuration(&cfg.HeartbeatInterval, "heartbeat_interval", raw.HeartbeatInterval); err != nil {
 		return err
@@ -261,6 +278,9 @@ func mergeConfigFile(cfg *Config, path string) error {
 	if err := applyDuration(&cfg.ShutdownTimeout, "shutdown_timeout", raw.ShutdownTimeout); err != nil {
 		return err
 	}
+	if err := applyDuration(&cfg.RealtimePingInterval, "realtime_ping_interval", raw.RealtimePingInterval); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -272,6 +292,9 @@ func mergeEnv(cfg *Config) error {
 	overrideString(&cfg.AgentToken, "AGENT_TOKEN")
 	overrideString(&cfg.StateFile, "STATE_FILE")
 	overrideString(&cfg.LogLevel, "LOG_LEVEL")
+	if err := overrideBool(&cfg.RealtimeEnabled, "REALTIME_ENABLED"); err != nil {
+		return err
+	}
 
 	if err := overrideDuration(&cfg.HeartbeatInterval, "HEARTBEAT_INTERVAL"); err != nil {
 		return err
@@ -289,6 +312,9 @@ func mergeEnv(cfg *Config) error {
 		return err
 	}
 	if err := overrideDuration(&cfg.ShutdownTimeout, "SHUTDOWN_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := overrideDuration(&cfg.RealtimePingInterval, "REALTIME_PING_INTERVAL"); err != nil {
 		return err
 	}
 
@@ -323,6 +349,21 @@ func overrideDuration(target *time.Duration, key string) error {
 		return nil
 	}
 	return applyDuration(target, key, value)
+}
+
+func overrideBool(target *bool, key string) error {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return nil
+	}
+
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", key, err)
+	}
+
+	*target = parsed
+	return nil
 }
 
 func applyDuration(target *time.Duration, name, value string) error {

@@ -11,21 +11,22 @@ import (
 
 	"github.com/noderax/noderax-agent/internal/api"
 	"github.com/noderax/noderax-agent/internal/config"
-	"github.com/noderax/noderax-agent/internal/heartbeat"
 	"github.com/noderax/noderax-agent/internal/metrics"
+	"github.com/noderax/noderax-agent/internal/realtime"
 	"github.com/noderax/noderax-agent/internal/tasks"
 )
 
 type Service struct {
-	cfg       config.Config
-	client    *api.Client
-	logger    *slog.Logger
-	version   string
-	identity  *IdentityManager
-	store     *IdentityStore
-	heartbeat *heartbeat.Service
-	metrics   *metrics.Service
-	tasks     *tasks.Service
+	cfg      config.Config
+	client   *api.Client
+	logger   *slog.Logger
+	version  string
+	identity *IdentityManager
+	store    *IdentityStore
+	metrics  *metrics.Service
+	tasks    *tasks.Service
+	realtime *realtime.Service
+	initErr  error
 }
 
 func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, version string) *Service {
@@ -33,6 +34,29 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		NodeID:     cfg.NodeID,
 		AgentToken: cfg.AgentToken,
 	})
+	if !cfg.RealtimeEnabled {
+		logger.Warn("realtime mode is mandatory; ignoring realtime_enabled=false and continuing with realtime")
+	}
+
+	taskService := tasks.NewService(
+		logger,
+		cfg.RequestTimeout,
+		cfg.TaskTimeout,
+		identity.Credentials,
+	)
+
+	realtimeService, err := realtime.NewService(
+		cfg.APIURL,
+		cfg.RequestTimeout,
+		cfg.RealtimePingInterval,
+		logger,
+		identity.Credentials,
+		taskService,
+	)
+	if err != nil {
+		logger.Error("failed to initialize realtime service", "error", err)
+	}
+	taskService.SetRealtimeEvents(realtimeService)
 
 	return &Service{
 		cfg:      cfg,
@@ -41,33 +65,24 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		version:  version,
 		identity: identity,
 		store:    NewIdentityStore(cfg.StateFile),
-		heartbeat: heartbeat.NewService(
-			client,
-			logger,
-			cfg.HeartbeatInterval,
-			cfg.RequestTimeout,
-			identity.Credentials,
-			version,
-		),
 		metrics: metrics.NewService(
-			client,
+			realtimeService,
 			logger,
 			cfg.MetricsInterval,
 			cfg.RequestTimeout,
 			identity.Credentials,
 		),
-		tasks: tasks.NewService(
-			client,
-			logger,
-			cfg.TaskPollInterval,
-			cfg.RequestTimeout,
-			cfg.TaskTimeout,
-			identity.Credentials,
-		),
+		tasks:    taskService,
+		realtime: realtimeService,
+		initErr:  err,
 	}
 }
 
 func (s *Service) Run(ctx context.Context) error {
+	if s.initErr != nil {
+		return s.initErr
+	}
+
 	if err := s.bootstrapIdentity(ctx); err != nil {
 		return err
 	}
@@ -79,7 +94,7 @@ func (s *Service) Run(ctx context.Context) error {
 		name string
 		run  func(context.Context) error
 	}{
-		{name: "heartbeat", run: s.heartbeat.Run},
+		{name: "realtime", run: s.realtime.Run},
 		{name: "metrics", run: s.metrics.Run},
 		{name: "tasks", run: s.tasks.Run},
 	}

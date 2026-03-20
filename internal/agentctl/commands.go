@@ -444,12 +444,8 @@ func applyConfigValue(cfg *config.Config, key, value string) error {
 		cfg.NodeID = value
 	case "agent_token":
 		cfg.AgentToken = value
-	case "heartbeat_interval":
-		return setDuration(&cfg.HeartbeatInterval, value)
 	case "metrics_interval":
 		return setDuration(&cfg.MetricsInterval, value)
-	case "task_poll_interval":
-		return setDuration(&cfg.TaskPollInterval, value)
 	case "request_timeout":
 		return setDuration(&cfg.RequestTimeout, value)
 	case "task_timeout":

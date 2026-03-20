@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/go-resty/resty/v2 v2.17.2
+	github.com/gorilla/websocket v1.5.3
 	github.com/shirou/gopsutil/v4 v4.26.2
 )
 

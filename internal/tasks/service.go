@@ -11,30 +11,32 @@ import (
 )
 
 type Service struct {
-	client         *api.Client
 	logger         *slog.Logger
-	interval       time.Duration
 	requestTimeout time.Duration
 	credentials    func() (string, string)
 	executor       *ShellExecutor
+	realtime       RealtimeTaskEvents
 
 	mu      sync.Mutex
 	running map[string]struct{}
 	wg      sync.WaitGroup
 }
 
+type RealtimeTaskEvents interface {
+	TaskAccepted(context.Context, string, time.Time) error
+	TaskStarted(context.Context, string, time.Time) error
+	TaskLog(context.Context, string, string, string, time.Time) error
+	TaskCompleted(context.Context, api.CompleteTaskRequest) error
+}
+
 func NewService(
-	client *api.Client,
 	logger *slog.Logger,
-	interval time.Duration,
 	requestTimeout time.Duration,
 	defaultTaskTimeout time.Duration,
 	credentials func() (string, string),
 ) *Service {
 	return &Service{
-		client:         client,
 		logger:         logger,
-		interval:       interval,
 		requestTimeout: requestTimeout,
 		credentials:    credentials,
 		executor:       NewShellExecutor(defaultTaskTimeout),
@@ -43,65 +45,38 @@ func NewService(
 }
 
 func (s *Service) Run(ctx context.Context) error {
-	s.poll(ctx)
+	<-ctx.Done()
 
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
 
-	for {
-		select {
-		case <-ctx.Done():
-			done := make(chan struct{})
-			go func() {
-				s.wg.Wait()
-				close(done)
-			}()
-
-			select {
-			case <-done:
-				return nil
-			case <-time.After(s.requestTimeout):
-				s.logger.Warn("timed out waiting for running tasks to stop")
-				return nil
-			}
-		case <-ticker.C:
-			s.poll(ctx)
-		}
+	select {
+	case <-done:
+		return nil
+	case <-time.After(s.requestTimeout):
+		s.logger.Warn("timed out waiting for running tasks to stop")
+		return nil
 	}
 }
 
-func (s *Service) poll(ctx context.Context) {
-	nodeID, agentToken := s.credentials()
-	if nodeID == "" || agentToken == "" {
-		s.logger.Warn("task poll skipped because agent identity is missing")
-		return
+func (s *Service) SetRealtimeEvents(events RealtimeTaskEvents) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.realtime = events
+}
+
+func (s *Service) DispatchRealtimeTask(ctx context.Context, task api.Task) bool {
+	if !s.markRunning(task.ID) {
+		s.logger.Warn("task is already running, skipping duplicate", "task_id", task.ID)
+		return false
 	}
 
-	requestCtx, cancel := context.WithTimeout(ctx, s.requestTimeout)
-	defer cancel()
-
-	response, err := s.client.PullTasks(requestCtx, api.PullTasksRequest{
-		NodeID:     nodeID,
-		AgentToken: agentToken,
-		Limit:      10,
-	})
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return
-		}
-		s.logger.Error("task poll failed", "error", err)
-		return
-	}
-
-	for _, task := range response.Tasks {
-		if !s.markRunning(task.ID) {
-			s.logger.Warn("task is already running, skipping duplicate", "task_id", task.ID)
-			continue
-		}
-
-		s.wg.Add(1)
-		go s.handleTask(ctx, task)
-	}
+	s.wg.Add(1)
+	go s.handleTask(ctx, task)
+	return true
 }
 
 func (s *Service) handleTask(parentCtx context.Context, task api.Task) {
@@ -114,21 +89,23 @@ func (s *Service) handleTask(parentCtx context.Context, task api.Task) {
 		return
 	}
 
-	if err := s.withRequestTimeout(func(ctx context.Context) error {
-		return s.client.StartTask(ctx, api.StartTaskRequest{
-			NodeID:     nodeID,
-			AgentToken: agentToken,
-			TaskID:     task.ID,
-			StartedAt:  time.Now().UTC(),
-		})
-	}); err != nil {
-		s.logger.Error("failed to mark task as running", "task_id", task.ID, "error", err)
+	realtime := s.realtimeEvents()
+	if realtime == nil {
+		s.logger.Error("cannot execute task because realtime events are unavailable", "task_id", task.ID)
 		return
+	}
+
+	startedAt := time.Now().UTC()
+	if err := realtime.TaskAccepted(parentCtx, task.ID, startedAt); err != nil {
+		s.logger.Warn("failed to emit realtime task.accepted event", "task_id", task.ID, "error", err)
+	}
+	if err := realtime.TaskStarted(parentCtx, task.ID, startedAt); err != nil {
+		s.logger.Warn("failed to emit realtime task.started event", "task_id", task.ID, "error", err)
 	}
 
 	s.logger.Info("task started", "task_id", task.ID, "type", task.Type)
 
-	logSink := newTaskLogSink(s.client, s.logger, s.requestTimeout, nodeID, agentToken, task.ID)
+	logSink := newRealtimeTaskLogSink(realtime, s.logger, task.ID)
 	taskCtx, cancel := context.WithTimeout(parentCtx, s.executor.TimeoutFor(task))
 	defer cancel()
 
@@ -149,21 +126,25 @@ func (s *Service) handleTask(parentCtx context.Context, task api.Task) {
 		completedAt = time.Now().UTC()
 	}
 
-	completeErr := s.withRequestTimeout(func(ctx context.Context) error {
-		return s.client.CompleteTask(ctx, api.CompleteTaskRequest{
-			NodeID:      nodeID,
-			AgentToken:  agentToken,
-			TaskID:      task.ID,
-			Status:      status,
-			ExitCode:    result.ExitCode,
-			Error:       errorMessage,
-			CompletedAt: completedAt,
-			DurationMS:  result.Duration.Milliseconds(),
-		})
+	completeErr := realtime.TaskCompleted(parentCtx, api.CompleteTaskRequest{
+		NodeID:      nodeID,
+		AgentToken:  agentToken,
+		TaskID:      task.ID,
+		Status:      status,
+		ExitCode:    result.ExitCode,
+		Error:       errorMessage,
+		CompletedAt: completedAt,
+		DurationMS:  result.Duration.Milliseconds(),
 	})
 	if completeErr != nil {
 		s.logger.Error("failed to complete task", "task_id", task.ID, "error", completeErr)
 	}
+}
+
+func (s *Service) realtimeEvents() RealtimeTaskEvents {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.realtime
 }
 
 func (s *Service) markRunning(taskID string) bool {
@@ -184,12 +165,6 @@ func (s *Service) unmarkRunning(taskID string) {
 	delete(s.running, taskID)
 }
 
-func (s *Service) withRequestTimeout(fn func(context.Context) error) error {
-	ctx, cancel := context.WithTimeout(context.Background(), s.requestTimeout)
-	defer cancel()
-	return fn(ctx)
-}
-
 func taskStatus(err error) string {
 	switch {
 	case err == nil:
@@ -203,41 +178,28 @@ func taskStatus(err error) string {
 	}
 }
 
-type taskLogSink struct {
-	client         *api.Client
-	logger         *slog.Logger
-	requestTimeout time.Duration
-	nodeID         string
-	agentToken     string
-	taskID         string
-	ch             chan api.TaskLogEntry
-	done           chan struct{}
+type realtimeTaskLogSink struct {
+	realtime RealtimeTaskEvents
+	logger   *slog.Logger
+	taskID   string
+	ch       chan api.TaskLogEntry
+	done     chan struct{}
 }
 
-func newTaskLogSink(
-	client *api.Client,
-	logger *slog.Logger,
-	requestTimeout time.Duration,
-	nodeID string,
-	agentToken string,
-	taskID string,
-) *taskLogSink {
-	sink := &taskLogSink{
-		client:         client,
-		logger:         logger,
-		requestTimeout: requestTimeout,
-		nodeID:         nodeID,
-		agentToken:     agentToken,
-		taskID:         taskID,
-		ch:             make(chan api.TaskLogEntry, 256),
-		done:           make(chan struct{}),
+func newRealtimeTaskLogSink(realtime RealtimeTaskEvents, logger *slog.Logger, taskID string) *realtimeTaskLogSink {
+	sink := &realtimeTaskLogSink{
+		realtime: realtime,
+		logger:   logger,
+		taskID:   taskID,
+		ch:       make(chan api.TaskLogEntry, 512),
+		done:     make(chan struct{}),
 	}
 
 	go sink.run()
 	return sink
 }
 
-func (s *taskLogSink) Enqueue(stream, line string) {
+func (s *realtimeTaskLogSink) Enqueue(stream, line string) {
 	entry := api.TaskLogEntry{
 		Timestamp: time.Now().UTC(),
 		Stream:    stream,
@@ -247,57 +209,21 @@ func (s *taskLogSink) Enqueue(stream, line string) {
 	select {
 	case s.ch <- entry:
 	default:
-		s.logger.Warn("dropping task log entry because the buffer is full", "task_id", s.taskID)
+		s.logger.Warn("dropping realtime task.log event because the buffer is full", "task_id", s.taskID)
 	}
 }
 
-func (s *taskLogSink) Close() {
+func (s *realtimeTaskLogSink) Close() {
 	close(s.ch)
 	<-s.done
 }
 
-func (s *taskLogSink) run() {
+func (s *realtimeTaskLogSink) run() {
 	defer close(s.done)
 
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	batch := make([]api.TaskLogEntry, 0, 20)
-	flush := func() {
-		if len(batch) == 0 {
-			return
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), s.requestTimeout)
-		err := s.client.SendTaskLogs(ctx, api.SendTaskLogsRequest{
-			NodeID:     s.nodeID,
-			AgentToken: s.agentToken,
-			TaskID:     s.taskID,
-			Entries:    append([]api.TaskLogEntry(nil), batch...),
-		})
-		cancel()
-
-		if err != nil {
-			s.logger.Warn("failed to send task logs", "task_id", s.taskID, "error", err)
-		}
-
-		batch = batch[:0]
-	}
-
-	for {
-		select {
-		case entry, ok := <-s.ch:
-			if !ok {
-				flush()
-				return
-			}
-
-			batch = append(batch, entry)
-			if len(batch) >= 20 {
-				flush()
-			}
-		case <-ticker.C:
-			flush()
+	for entry := range s.ch {
+		if err := s.realtime.TaskLog(context.Background(), s.taskID, entry.Stream, entry.Line, entry.Timestamp); err != nil {
+			s.logger.Warn("failed to emit realtime task.log event", "task_id", s.taskID, "error", err)
 		}
 	}
 }

@@ -66,40 +66,6 @@ func (c *Client) GetEnrollment(ctx context.Context, token string) (EnrollmentSta
 	return response, nil
 }
 
-func (c *Client) Heartbeat(ctx context.Context, request HeartbeatRequest) error {
-	return c.post(ctx, apiPath("/agent/heartbeat"), request, nil)
-}
-
-func (c *Client) SendMetrics(ctx context.Context, request MetricsRequest) error {
-	return c.post(ctx, apiPath("/agent/metrics"), request, nil)
-}
-
-func (c *Client) PullTasks(ctx context.Context, request PullTasksRequest) (PullTasksResponse, error) {
-	var response PullTasksResponse
-	if err := c.post(ctx, apiPath("/agent/tasks/pull"), request, &response); err != nil {
-		return PullTasksResponse{}, err
-	}
-	if response.Tasks == nil {
-		response.Tasks = []Task{}
-	}
-	return response, nil
-}
-
-func (c *Client) StartTask(ctx context.Context, request StartTaskRequest) error {
-	return c.post(ctx, apiPath(fmt.Sprintf("/agent/tasks/%s/start", request.TaskID)), request, nil)
-}
-
-func (c *Client) SendTaskLogs(ctx context.Context, request SendTaskLogsRequest) error {
-	if len(request.Entries) == 0 {
-		return nil
-	}
-	return c.post(ctx, apiPath(fmt.Sprintf("/agent/tasks/%s/logs", request.TaskID)), request, nil)
-}
-
-func (c *Client) CompleteTask(ctx context.Context, request CompleteTaskRequest) error {
-	return c.post(ctx, apiPath(fmt.Sprintf("/agent/tasks/%s/complete", request.TaskID)), request, nil)
-}
-
 func (c *Client) post(ctx context.Context, path string, request any, result any) error {
 	apiErr := &ErrorResponse{}
 	req := c.http.R().

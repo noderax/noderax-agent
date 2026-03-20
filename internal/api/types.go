@@ -44,13 +44,6 @@ type EnrollmentStatusResponse struct {
 	AgentToken string `json:"agentToken,omitempty"`
 }
 
-type HeartbeatRequest struct {
-	NodeID       string    `json:"nodeId"`
-	AgentToken   string    `json:"agentToken"`
-	AgentVersion string    `json:"agentVersion"`
-	SentAt       time.Time `json:"sentAt"`
-}
-
 type CPUStats struct {
 	UsagePercent float64 `json:"usagePercent"`
 }
@@ -93,16 +86,6 @@ type MetricsRequest struct {
 	Networks    []NetworkStats `json:"networks"`
 }
 
-type PullTasksRequest struct {
-	NodeID     string `json:"nodeId"`
-	AgentToken string `json:"agentToken"`
-	Limit      int    `json:"limit"`
-}
-
-type PullTasksResponse struct {
-	Tasks []Task `json:"tasks"`
-}
-
 type Task struct {
 	ID             string          `json:"id"`
 	Type           string          `json:"type"`
@@ -110,24 +93,10 @@ type Task struct {
 	TimeoutSeconds int             `json:"timeoutSeconds,omitempty"`
 }
 
-type StartTaskRequest struct {
-	NodeID     string    `json:"nodeId"`
-	AgentToken string    `json:"agentToken"`
-	TaskID     string    `json:"taskId"`
-	StartedAt  time.Time `json:"startedAt"`
-}
-
 type TaskLogEntry struct {
 	Timestamp time.Time `json:"timestamp"`
 	Stream    string    `json:"stream"`
 	Line      string    `json:"line"`
-}
-
-type SendTaskLogsRequest struct {
-	NodeID     string         `json:"nodeId"`
-	AgentToken string         `json:"agentToken"`
-	TaskID     string         `json:"taskId"`
-	Entries    []TaskLogEntry `json:"entries"`
 }
 
 type CompleteTaskRequest struct {
