@@ -258,7 +258,7 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 			RequestHeader: reqHeader,
 		},
 	})
-	socket := manager.Socket("/", &sio.ClientSocketConfig{})
+	socket := manager.Socket("/agent-realtime", &sio.ClientSocketConfig{})
 
 	connectedCh := make(chan struct{}, 1)
 	connectErrCh := make(chan error, 1)
@@ -474,7 +474,7 @@ func realtimeEndpoint(apiURL string) (string, error) {
 		return "", fmt.Errorf("API_URL has unsupported scheme for socket.io endpoint: %q", parsed.Scheme)
 	}
 
-	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/agent-realtime"
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/socket.io"
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return parsed.String(), nil
