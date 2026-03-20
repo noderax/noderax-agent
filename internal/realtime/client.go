@@ -124,7 +124,6 @@ func NewService(
 
 func (s *Service) Run(ctx context.Context) error {
 	attempt := 0
-	preferPollingOnly := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil
@@ -139,12 +138,8 @@ func (s *Service) Run(ctx context.Context) error {
 			s.selfChecked.Store(true)
 		}
 
-		client, err := s.connect(ctx, preferPollingOnly)
+		client, err := s.connect(ctx)
 		if err != nil {
-			message := strings.ToLower(err.Error())
-			if strings.Contains(message, "auth error") || strings.Contains(message, "reading 'get'") || strings.Contains(message, "transport close") || strings.Contains(message, "io server disconnect") {
-				preferPollingOnly = true
-			}
 			s.logger.Warn("realtime connect failed", "error", err)
 			s.reconnects.Add(1)
 
@@ -162,12 +157,6 @@ func (s *Service) Run(ctx context.Context) error {
 		err = s.runConnection(ctx, client)
 		if err == nil || errors.Is(err, context.Canceled) {
 			return nil
-		}
-
-		errText := strings.ToLower(err.Error())
-		preferPollingOnly = strings.Contains(errText, "transport close") || strings.Contains(errText, "io server disconnect")
-		if preferPollingOnly {
-			s.logger.Warn("realtime transport degraded; next reconnect will use polling-only", "error", err)
 		}
 
 		s.logger.Warn("realtime socket.io connection closed", "error", err)
@@ -280,19 +269,15 @@ func (s *Service) SnapshotStats() Stats {
 	}
 }
 
-func (s *Service) connect(ctx context.Context, pollingOnly bool) (*socketIOConn, error) {
+func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 	nodeID, agentToken := s.credentials()
 	if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(agentToken) == "" {
 		return nil, fmt.Errorf("agent credentials are missing")
 	}
 
 	randomization := float32(s.jitterRatio)
-	transportMode := "polling,websocket"
-	transports := []string{"polling", "websocket"}
-	if pollingOnly {
-		transportMode = "polling"
-		transports = []string{"polling"}
-	}
+	transportMode := "websocket-only"
+	transports := []string{"websocket"}
 	s.logger.Info("realtime dial attempt", "base_url", s.dialURL, "namespace", s.namespace, "path", s.path, "transport_mode", transportMode)
 
 	reqHeader := transport.NewRequestHeader(http.Header{})
@@ -395,6 +380,7 @@ func (s *Service) connect(ctx context.Context, pollingOnly bool) (*socketIOConn,
 	})
 
 	socket.OnConnectError(func(err any) {
+		s.logger.Warn("realtime namespace connect error", "error", err, "url", s.dialURL, "namespace", s.namespace, "path", s.path)
 		select {
 		case connectErrCh <- fmt.Errorf("namespace connect failure: %v", err):
 		default:
@@ -402,6 +388,7 @@ func (s *Service) connect(ctx context.Context, pollingOnly bool) (*socketIOConn,
 	})
 	socket.OnDisconnect(func(reason sio.Reason) {
 		s.sessionActive.Store(false)
+		s.logger.Warn("realtime socket disconnected", "reason", reason, "url", s.dialURL, "namespace", s.namespace, "path", s.path)
 		select {
 		case disconnectCh <- fmt.Errorf("socket.io disconnected: %s", reason):
 		default:
@@ -409,6 +396,7 @@ func (s *Service) connect(ctx context.Context, pollingOnly bool) (*socketIOConn,
 	})
 	manager.OnError(func(err error) {
 		s.sessionActive.Store(false)
+		s.logger.Warn("realtime manager error", "error", err, "url", s.dialURL, "namespace", s.namespace, "path", s.path)
 		select {
 		case connectErrCh <- classifyDialError(err):
 		default:
