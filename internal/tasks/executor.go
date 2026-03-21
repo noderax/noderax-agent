@@ -600,14 +600,15 @@ func emitLog(onLog func(string, string), stream, line string) {
 	onLog(stream, line)
 }
 
+type PackageInfo struct {
+	Name         string `json:"name"`
+	Version      string `json:"version,omitempty"`
+	Architecture string `json:"architecture,omitempty"`
+	Description  string `json:"description,omitempty"`
+}
+
 func parsePackageList(output string) any {
-	type pkg struct {
-		Name    string `json:"name"`
-		Version string `json:"version,omitempty"`
-		Arch    string `json:"arch,omitempty"`
-		Desc    string `json:"description,omitempty"`
-	}
-	var results []pkg
+	results := make([]PackageInfo, 0)
 
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
@@ -620,11 +621,11 @@ func parsePackageList(output string) any {
 		if strings.HasPrefix(line, "ii ") || strings.HasPrefix(line, "hi ") || strings.HasPrefix(line, "rc ") {
 			fields := strings.Fields(line)
 			if len(fields) >= 4 {
-				results = append(results, pkg{
-					Name:    fields[1],
-					Version: fields[2],
-					Arch:    fields[3],
-					Desc:    strings.Join(fields[4:], " "),
+				results = append(results, PackageInfo{
+					Name:         fields[1],
+					Version:      fields[2],
+					Architecture: fields[3],
+					Description:  strings.Join(fields[4:], " "),
 				})
 			}
 			continue
@@ -635,30 +636,26 @@ func parsePackageList(output string) any {
 			fields := strings.Fields(line)
 			if len(fields) >= 3 {
 				namePart := strings.SplitN(fields[0], "/", 2)[0]
-				results = append(results, pkg{
-					Name:    namePart,
-					Version: fields[1],
-					Arch:    fields[2],
+				results = append(results, PackageInfo{
+					Name:         namePart,
+					Version:      fields[1],
+					Architecture: fields[2],
 				})
 			}
 			continue
 		}
 	}
 
-	return results
+	return map[string]any{
+		"packages": results,
+	}
 }
 
 func parsePackageSearch(output string) any {
-	type pkg struct {
-		Name    string `json:"name"`
-		Version string `json:"version,omitempty"`
-		Arch    string `json:"arch,omitempty"`
-		Desc    string `json:"description,omitempty"`
-	}
-	var results []pkg
+	results := make([]PackageInfo, 0)
 
 	lines := strings.Split(output, "\n")
-	var currentPkg *pkg
+	var currentPkg *PackageInfo
 
 	for i := 0; i < len(lines); i++ {
 		line := strings.TrimRight(lines[i], "\r\t ")
@@ -674,21 +671,21 @@ func parsePackageSearch(output string) any {
 					results = append(results, *currentPkg)
 				}
 				namePart := strings.SplitN(fields[0], "/", 2)[0]
-				currentPkg = &pkg{
+				currentPkg = &PackageInfo{
 					Name:    namePart,
 					Version: fields[1],
 				}
 				if len(fields) >= 3 {
-					currentPkg.Arch = fields[2]
+					currentPkg.Architecture = fields[2]
 				}
 			}
 		} else if currentPkg != nil {
 			// desc line
 			desc := strings.TrimSpace(line)
-			if currentPkg.Desc == "" {
-				currentPkg.Desc = desc
+			if currentPkg.Description == "" {
+				currentPkg.Description = desc
 			} else {
-				currentPkg.Desc += " " + desc
+				currentPkg.Description += " " + desc
 			}
 		}
 	}
@@ -697,7 +694,9 @@ func parsePackageSearch(output string) any {
 		results = append(results, *currentPkg)
 	}
 
-	return results
+	return map[string]any{
+		"results": results,
+	}
 }
 
 func exitCode(err error) int {

@@ -120,11 +120,24 @@ func (s *Service) handleTask(parentCtx context.Context, task api.Task) {
 
 	status := taskStatus(execErr)
 	errorMessage := ""
+
+	hasResult := result.Result != nil
+	pkgCount := 0
+	if hasResult {
+		if resultMap, ok := result.Result.(map[string]any); ok {
+			if pkgs, ok := resultMap["packages"].([]PackageInfo); ok {
+				pkgCount = len(pkgs)
+			} else if res, ok := resultMap["results"].([]PackageInfo); ok {
+				pkgCount = len(res)
+			}
+		}
+	}
+
 	if execErr != nil {
 		errorMessage = execErr.Error()
-		s.logger.Warn("task finished with error", "task_id", task.ID, "status", status, "error", execErr)
+		s.logger.Warn("task finished with error", "task_id", task.ID, "status", status, "error", execErr, "has_result", hasResult)
 	} else {
-		s.logger.Info("task completed", "task_id", task.ID, "exit_code", result.ExitCode, "duration", result.Duration)
+		s.logger.Info("task completed", "task_id", task.ID, "exit_code", result.ExitCode, "duration", result.Duration, "has_result", hasResult, "pkg_count", pkgCount)
 	}
 
 	completedAt := result.CompletedAt
