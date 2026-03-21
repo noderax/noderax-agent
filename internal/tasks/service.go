@@ -142,6 +142,8 @@ func (s *Service) handleTask(parentCtx context.Context, task api.Task) {
 		Error:       errorMessage,
 		CompletedAt: completedAt,
 		DurationMS:  result.Duration.Milliseconds(),
+		Result:      result.Result,
+		Output:      result.Output,
 	})
 	if completeErr == nil {
 		completeSent = true

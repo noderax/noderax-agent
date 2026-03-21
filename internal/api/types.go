@@ -104,6 +104,8 @@ type CompleteTaskRequest struct {
 	AgentToken  string    `json:"agentToken"`
 	TaskID      string    `json:"taskId"`
 	Status      string    `json:"status"`
+	Result      any       `json:"result,omitempty"`
+	Output      string    `json:"output,omitempty"`
 	ExitCode    int       `json:"exitCode"`
 	Error       string    `json:"error,omitempty"`
 	CompletedAt time.Time `json:"completedAt"`

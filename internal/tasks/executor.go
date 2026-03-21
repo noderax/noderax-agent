@@ -24,6 +24,7 @@ const (
 	TaskTypePackageSearch  = "packageSearch"
 	TaskTypePackageInstall = "packageInstall"
 	TaskTypePackageRemove  = "packageRemove"
+	TaskTypePackagePurge   = "packagePurge"
 )
 
 var (
@@ -43,11 +44,13 @@ type ShellExecPayload struct {
 
 type packageSearchPayload struct {
 	Query string `json:"query"`
+	Term  string `json:"term"`
 }
 
 type packageMutationPayload struct {
 	Package  string   `json:"package,omitempty"`
 	Packages []string `json:"packages,omitempty"`
+	Names    []string `json:"names,omitempty"`
 	Purge    bool     `json:"purge,omitempty"`
 }
 
@@ -56,6 +59,8 @@ type ExecutionResult struct {
 	StartedAt   time.Time
 	CompletedAt time.Time
 	Duration    time.Duration
+	Output      string
+	Result      any
 }
 
 type commandSpec struct {
@@ -64,6 +69,7 @@ type commandSpec struct {
 	env          map[string]string
 	dir          string
 	startMessage string
+	parseResult  func(string) any
 }
 
 type commandRunner interface {

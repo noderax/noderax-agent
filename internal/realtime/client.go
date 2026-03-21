@@ -213,6 +213,8 @@ func (s *Service) TaskCompleted(ctx context.Context, event api.CompleteTaskReque
 		Type:       EventTaskComplete,
 		TaskID:     event.TaskID,
 		Status:     event.Status,
+		Result:     event.Result,
+		Output:     event.Output,
 		ExitCode:   event.ExitCode,
 		Error:      event.Error,
 		DurationMS: event.DurationMS,
