@@ -193,18 +193,44 @@ func (e *ShellExecutor) Execute(ctx context.Context, task api.Task, onLog func(s
 
 	var scanWG sync.WaitGroup
 	scanWG.Add(2)
-	go scanOutput(&scanWG, stdout, "stdout", onLog)
-	go scanOutput(&scanWG, stderr, "stderr", onLog)
+
+	var mx sync.Mutex
+	var outBuilder strings.Builder
+	captureLog := func(stream, line string) {
+		if stream == "stdout" {
+			mx.Lock()
+			if outBuilder.Len() < 1024*1024*2 { // 2MB limit
+				outBuilder.WriteString(line)
+				outBuilder.WriteByte('\n')
+			}
+			mx.Unlock()
+		}
+		if onLog != nil {
+			onLog(stream, line)
+		}
+	}
+
+	go scanOutput(&scanWG, stdout, "stdout", captureLog)
+	go scanOutput(&scanWG, stderr, "stderr", captureLog)
 
 	waitErr := cmd.Wait()
 	scanWG.Wait()
 
 	completedAt := time.Now().UTC()
+	rawOutput := outBuilder.String()
+
+	var parsedResult any
+	if spec.parseResult != nil {
+		parsedResult = spec.parseResult(rawOutput)
+	}
+
 	result := ExecutionResult{
 		ExitCode:    exitCode(waitErr),
 		StartedAt:   startedAt,
 		CompletedAt: completedAt,
 		Duration:    completedAt.Sub(startedAt),
+		Output:      rawOutput,
+		Result:      parsedResult,
 	}
 
 	emitLog(onLog, "system", fmt.Sprintf("command finished with exit code %d", result.ExitCode))
@@ -231,6 +257,8 @@ func (e *ShellExecutor) commandForTask(task api.Task) (commandSpec, error) {
 		return e.packageInstallCommand(task.Payload)
 	case TaskTypePackageRemove:
 		return e.packageRemoveCommand(task.Payload)
+	case TaskTypePackagePurge:
+		return e.packagePurgeCommand(task.Payload)
 	default:
 		return commandSpec{}, fmt.Errorf("%w: %s", ErrUnsupportedTaskType, task.Type)
 	}
@@ -266,6 +294,7 @@ func (e *ShellExecutor) packageListCommand() (commandSpec, error) {
 			name:         dpkgPath,
 			args:         args,
 			startMessage: fmt.Sprintf("running %s", formatCommandForLog(dpkgPath, args)),
+			parseResult:  parsePackageList,
 		}, nil
 	}
 
@@ -279,6 +308,7 @@ func (e *ShellExecutor) packageListCommand() (commandSpec, error) {
 		name:         aptPath,
 		args:         args,
 		startMessage: fmt.Sprintf("running %s", formatCommandForLog(aptPath, args)),
+		parseResult:  parsePackageList,
 	}, nil
 }
 
@@ -293,6 +323,10 @@ func (e *ShellExecutor) packageSearchCommand(payload json.RawMessage) (commandSp
 	}
 
 	query := strings.TrimSpace(parsed.Query)
+	if query == "" {
+		query = strings.TrimSpace(parsed.Term)
+	}
+
 	terms := strings.Fields(query)
 	if len(terms) == 0 {
 		return commandSpec{}, fmt.Errorf("%w: packageSearch payload requires a non-empty query", ErrInvalidTaskPayload)
@@ -313,6 +347,7 @@ func (e *ShellExecutor) packageSearchCommand(payload json.RawMessage) (commandSp
 		name:         aptPath,
 		args:         args,
 		startMessage: fmt.Sprintf("running %s", formatCommandForLog(aptPath, args)),
+		parseResult:  parsePackageSearch,
 	}, nil
 }
 
@@ -374,6 +409,35 @@ func (e *ShellExecutor) packageRemoveCommand(payload json.RawMessage) (commandSp
 	}, nil
 }
 
+func (e *ShellExecutor) packagePurgeCommand(payload json.RawMessage) (commandSpec, error) {
+	if err := e.ensureLinuxTaskSupport(); err != nil {
+		return commandSpec{}, err
+	}
+
+	aptGetPath, err := e.requireBinary("apt-get")
+	if err != nil {
+		return commandSpec{}, err
+	}
+
+	var parsed packageMutationPayload
+	if err := decodePayload(payload, &parsed, TaskTypePackagePurge); err != nil {
+		return commandSpec{}, err
+	}
+
+	packages, err := normalizePackageNames(parsed)
+	if err != nil {
+		return commandSpec{}, err
+	}
+
+	args := append([]string{"purge", "-y", "--"}, packages...)
+	return commandSpec{
+		name:         aptGetPath,
+		args:         args,
+		env:          map[string]string{"DEBIAN_FRONTEND": "noninteractive"},
+		startMessage: fmt.Sprintf("running %s", formatCommandForLog(aptGetPath, args)),
+	}, nil
+}
+
 func (e *ShellExecutor) ensureLinuxTaskSupport() error {
 	if e.goos != "linux" {
 		return fmt.Errorf("%w: package tasks require linux, got %s", ErrUnsupportedExecutionEnvironment, e.goos)
@@ -421,11 +485,12 @@ func decodePackageNames(payload json.RawMessage) ([]string, error) {
 }
 
 func normalizePackageNames(payload packageMutationPayload) ([]string, error) {
-	rawNames := make([]string, 0, len(payload.Packages)+1)
+	rawNames := make([]string, 0, len(payload.Packages)+len(payload.Names)+1)
 	if payload.Package != "" {
 		rawNames = append(rawNames, payload.Package)
 	}
 	rawNames = append(rawNames, payload.Packages...)
+	rawNames = append(rawNames, payload.Names...)
 
 	packages := make([]string, 0, len(rawNames))
 	for _, raw := range rawNames {
@@ -533,6 +598,106 @@ func emitLog(onLog func(string, string), stream, line string) {
 		return
 	}
 	onLog(stream, line)
+}
+
+func parsePackageList(output string) any {
+	type pkg struct {
+		Name    string `json:"name"`
+		Version string `json:"version,omitempty"`
+		Arch    string `json:"arch,omitempty"`
+		Desc    string `json:"description,omitempty"`
+	}
+	var results []pkg
+
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// dpkg -l format
+		if strings.HasPrefix(line, "ii ") || strings.HasPrefix(line, "hi ") || strings.HasPrefix(line, "rc ") {
+			fields := strings.Fields(line)
+			if len(fields) >= 4 {
+				results = append(results, pkg{
+					Name:    fields[1],
+					Version: fields[2],
+					Arch:    fields[3],
+					Desc:    strings.Join(fields[4:], " "),
+				})
+			}
+			continue
+		}
+
+		// apt list --installed format
+		if strings.Contains(line, "[installed") {
+			fields := strings.Fields(line)
+			if len(fields) >= 3 {
+				namePart := strings.SplitN(fields[0], "/", 2)[0]
+				results = append(results, pkg{
+					Name:    namePart,
+					Version: fields[1],
+					Arch:    fields[2],
+				})
+			}
+			continue
+		}
+	}
+
+	return results
+}
+
+func parsePackageSearch(output string) any {
+	type pkg struct {
+		Name    string `json:"name"`
+		Version string `json:"version,omitempty"`
+		Arch    string `json:"arch,omitempty"`
+		Desc    string `json:"description,omitempty"`
+	}
+	var results []pkg
+
+	lines := strings.Split(output, "\n")
+	var currentPkg *pkg
+
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimRight(lines[i], "\r\t ")
+		if line == "" || strings.HasPrefix(line, "Sorting...") || strings.HasPrefix(line, "Full Text Search...") {
+			continue
+		}
+
+		if !strings.HasPrefix(line, " ") {
+			// pkg line
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				if currentPkg != nil {
+					results = append(results, *currentPkg)
+				}
+				namePart := strings.SplitN(fields[0], "/", 2)[0]
+				currentPkg = &pkg{
+					Name:    namePart,
+					Version: fields[1],
+				}
+				if len(fields) >= 3 {
+					currentPkg.Arch = fields[2]
+				}
+			}
+		} else if currentPkg != nil {
+			// desc line
+			desc := strings.TrimSpace(line)
+			if currentPkg.Desc == "" {
+				currentPkg.Desc = desc
+			} else {
+				currentPkg.Desc += " " + desc
+			}
+		}
+	}
+
+	if currentPkg != nil {
+		results = append(results, *currentPkg)
+	}
+
+	return results
 }
 
 func exitCode(err error) int {
