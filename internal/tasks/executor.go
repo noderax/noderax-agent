@@ -69,7 +69,7 @@ type commandSpec struct {
 	env          map[string]string
 	dir          string
 	startMessage string
-	parseResult  func(string) any
+	parseResult  func(string, func(string, string)) any
 }
 
 type commandRunner interface {
@@ -221,7 +221,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, task api.Task, onLog func(s
 
 	var parsedResult any
 	if spec.parseResult != nil {
-		parsedResult = spec.parseResult(rawOutput)
+		parsedResult = spec.parseResult(rawOutput, onLog)
 	}
 
 	result := ExecutionResult{
@@ -607,10 +607,12 @@ type PackageInfo struct {
 	Description  string `json:"description,omitempty"`
 }
 
-func parsePackageList(output string) any {
+func parsePackageList(output string, onLog func(string, string)) any {
 	results := make([]PackageInfo, 0)
-
 	lines := strings.Split(output, "\n")
+	
+	var formatDpkg, formatApt, formatCompact int
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -627,6 +629,7 @@ func parsePackageList(output string) any {
 					Architecture: fields[3],
 					Description:  strings.Join(fields[4:], " "),
 				})
+				formatDpkg++
 			}
 			continue
 		}
@@ -641,9 +644,43 @@ func parsePackageList(output string) any {
 					Version:      fields[1],
 					Architecture: fields[2],
 				})
+				formatApt++
 			}
 			continue
 		}
+
+		// compact name:version format
+		if strings.Contains(line, ":") && len(strings.Fields(line)) == 1 {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+				results = append(results, PackageInfo{
+					Name:    parts[0],
+					Version: parts[1],
+				})
+				formatCompact++
+			}
+			continue
+		}
+	}
+
+	hasOutput := len(strings.TrimSpace(output)) > 0
+	if hasOutput && len(results) == 0 {
+		if onLog != nil {
+			emitLog(onLog, "system", "parse failure: unable to extract any packages from output")
+		}
+		return nil
+	}
+
+	if onLog != nil {
+		formatDetected := "unknown"
+		if formatDpkg > 0 {
+			formatDetected = "dpkg"
+		} else if formatApt > 0 {
+			formatDetected = "apt"
+		} else if formatCompact > 0 {
+			formatDetected = "compact"
+		}
+		emitLog(onLog, "system", fmt.Sprintf("parsed %d packages (format: %s)", len(results), formatDetected))
 	}
 
 	return map[string]any{
@@ -651,12 +688,11 @@ func parsePackageList(output string) any {
 	}
 }
 
-func parsePackageSearch(output string) any {
+func parsePackageSearch(output string, onLog func(string, string)) any {
 	results := make([]PackageInfo, 0)
-
 	lines := strings.Split(output, "\n")
+	
 	var currentPkg *PackageInfo
-
 	for i := 0; i < len(lines); i++ {
 		line := strings.TrimRight(lines[i], "\r\t ")
 		if line == "" || strings.HasPrefix(line, "Sorting...") || strings.HasPrefix(line, "Full Text Search...") {
@@ -692,6 +728,18 @@ func parsePackageSearch(output string) any {
 
 	if currentPkg != nil {
 		results = append(results, *currentPkg)
+	}
+
+	hasOutput := len(strings.TrimSpace(output)) > 0
+	if hasOutput && len(results) == 0 {
+		if onLog != nil {
+			emitLog(onLog, "system", "parse failure: unable to extract any package search results from output")
+		}
+		return nil
+	}
+
+	if onLog != nil {
+		emitLog(onLog, "system", fmt.Sprintf("parsed %d search results", len(results)))
 	}
 
 	return map[string]any{
