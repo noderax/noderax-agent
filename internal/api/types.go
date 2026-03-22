@@ -100,8 +100,6 @@ type TaskLogEntry struct {
 }
 
 type CompleteTaskRequest struct {
-	NodeID      string    `json:"nodeId"`
-	AgentToken  string    `json:"agentToken"`
 	TaskID      string    `json:"taskId"`
 	Status      string    `json:"status"`
 	Result      any       `json:"result,omitempty"`

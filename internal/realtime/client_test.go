@@ -202,8 +202,6 @@ func TestTaskCompletedTruncatesOutputAndOmitsAuthFields(t *testing.T) {
 
 	veryLargeOutput := strings.Repeat("x", maxTaskOutputChars+500)
 	err := svc.TaskCompleted(context.Background(), api.CompleteTaskRequest{
-		NodeID:      "node-1",
-		AgentToken:  "token-1",
 		TaskID:      "task-1",
 		Status:      "success",
 		Output:      veryLargeOutput,
@@ -233,5 +231,51 @@ func TestTaskCompletedTruncatesOutputAndOmitsAuthFields(t *testing.T) {
 	text := string(bytes)
 	if strings.Contains(text, "nodeId") || strings.Contains(text, "agentToken") {
 		t.Fatalf("task.completed must not include auth fields, payload=%s", text)
+	}
+}
+
+func TestTaskStartedOmitsAuthFields(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{
+		outbound: make(chan any, 1),
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := svc.TaskStarted(context.Background(), "task-1", time.Now().UTC()); err != nil {
+		t.Fatalf("TaskStarted() error = %v", err)
+	}
+
+	msg := <-svc.outbound
+	bytes, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal started event: %v", err)
+	}
+	text := string(bytes)
+	if strings.Contains(text, "nodeId") || strings.Contains(text, "agentToken") {
+		t.Fatalf("task.started must not include auth fields, payload=%s", text)
+	}
+}
+
+func TestTaskLogOmitsAuthFields(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{
+		outbound: make(chan any, 1),
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := svc.TaskLog(context.Background(), "task-1", "stdout", "hello", time.Now().UTC()); err != nil {
+		t.Fatalf("TaskLog() error = %v", err)
+	}
+
+	msg := <-svc.outbound
+	bytes, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal log event: %v", err)
+	}
+	text := string(bytes)
+	if strings.Contains(text, "nodeId") || strings.Contains(text, "agentToken") {
+		t.Fatalf("task.log must not include auth fields, payload=%s", text)
 	}
 }

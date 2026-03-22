@@ -24,7 +24,7 @@ import (
 const (
 	defaultRealtimeNamespace = "/agent-realtime"
 	defaultRealtimePath      = "/socket.io/"
-	maxTaskOutputChars       = 8000
+	maxTaskOutputChars       = 4000
 )
 
 type AuthSuccessHook func(context.Context)
@@ -175,7 +175,14 @@ func (s *Service) Run(ctx context.Context) error {
 }
 
 func (s *Service) TaskAccepted(ctx context.Context, taskID string, timestamp time.Time) error {
-	s.logger.Debug("emitting lifecycle event", "event", EventTaskAccepted, "task_id", taskID, "payload_keys", "type,taskId,timestamp")
+	s.logger.Debug(
+		"emitting lifecycle event",
+		"event", EventTaskAccepted,
+		"task_id", taskID,
+		"payload_keys", "type,taskId,timestamp",
+		"output_length", 0,
+		"output_truncated", false,
+	)
 	err := s.enqueueCritical(ctx, taskAcceptedEvent{
 		Type:      EventTaskAccepted,
 		TaskID:    taskID,
@@ -188,7 +195,14 @@ func (s *Service) TaskAccepted(ctx context.Context, taskID string, timestamp tim
 }
 
 func (s *Service) TaskStarted(ctx context.Context, taskID string, timestamp time.Time) error {
-	s.logger.Debug("emitting lifecycle event", "event", EventTaskStarted, "task_id", taskID, "payload_keys", "type,taskId,timestamp")
+	s.logger.Debug(
+		"emitting lifecycle event",
+		"event", EventTaskStarted,
+		"task_id", taskID,
+		"payload_keys", "type,taskId,timestamp",
+		"output_length", 0,
+		"output_truncated", false,
+	)
 	err := s.enqueueCritical(ctx, taskStartedEvent{
 		Type:      EventTaskStarted,
 		TaskID:    taskID,
@@ -201,7 +215,14 @@ func (s *Service) TaskStarted(ctx context.Context, taskID string, timestamp time
 }
 
 func (s *Service) TaskLog(ctx context.Context, taskID, stream, line string, timestamp time.Time) error {
-	s.logger.Debug("emitting lifecycle event", "event", EventTaskLog, "task_id", taskID, "payload_keys", "type,taskId,stream,line,timestamp")
+	s.logger.Debug(
+		"emitting lifecycle event",
+		"event", EventTaskLog,
+		"task_id", taskID,
+		"payload_keys", "type,taskId,stream,line,timestamp",
+		"output_length", 0,
+		"output_truncated", false,
+	)
 	err := s.enqueueBestEffort(taskLogEvent{
 		Type:      EventTaskLog,
 		TaskID:    taskID,
@@ -216,6 +237,7 @@ func (s *Service) TaskLog(ctx context.Context, taskID, stream, line string, time
 }
 
 func (s *Service) TaskCompleted(ctx context.Context, event api.CompleteTaskRequest) error {
+	rawOutputLength := len([]rune(event.Output))
 	boundedOutput, truncated := truncateTaskOutput(event.Output, maxTaskOutputChars)
 	outputLength := len([]rune(boundedOutput))
 	s.logger.Debug(
@@ -223,6 +245,7 @@ func (s *Service) TaskCompleted(ctx context.Context, event api.CompleteTaskReque
 		"event", EventTaskComplete,
 		"task_id", event.TaskID,
 		"payload_keys", "type,taskId,status,result,output,exitCode,error,timestamp,durationMs",
+		"raw_output_length", rawOutputLength,
 		"output_truncated", truncated,
 		"output_length", outputLength,
 	)
