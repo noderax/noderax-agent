@@ -129,8 +129,6 @@ func (s *Service) handleTask(parentCtx context.Context, task api.Task, receivedA
 		}
 
 		completeErr := realtime.TaskCompleted(parentCtx, api.CompleteTaskRequest{
-			NodeID:      nodeID,
-			AgentToken:  agentToken,
 			TaskID:      task.ID,
 			Status:      status,
 			ExitCode:    exitCode,

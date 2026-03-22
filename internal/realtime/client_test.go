@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -165,5 +166,72 @@ func TestSanitizeUsage(t *testing.T) {
 	}
 	if value := sanitizeUsage(101); value == nil || *value != 100 {
 		t.Fatalf("expected cap to 100, got %#v", value)
+	}
+}
+
+func TestTaskAcceptedOmitsAuthFields(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{
+		outbound: make(chan any, 1),
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := svc.TaskAccepted(context.Background(), "task-1", time.Now().UTC()); err != nil {
+		t.Fatalf("TaskAccepted() error = %v", err)
+	}
+
+	msg := <-svc.outbound
+	bytes, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal accepted event: %v", err)
+	}
+	text := string(bytes)
+	if strings.Contains(text, "nodeId") || strings.Contains(text, "agentToken") {
+		t.Fatalf("task.accepted must not include auth fields, payload=%s", text)
+	}
+}
+
+func TestTaskCompletedTruncatesOutputAndOmitsAuthFields(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{
+		outbound: make(chan any, 1),
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	veryLargeOutput := strings.Repeat("x", maxTaskOutputChars+500)
+	err := svc.TaskCompleted(context.Background(), api.CompleteTaskRequest{
+		NodeID:      "node-1",
+		AgentToken:  "token-1",
+		TaskID:      "task-1",
+		Status:      "success",
+		Output:      veryLargeOutput,
+		ExitCode:    0,
+		CompletedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("TaskCompleted() error = %v", err)
+	}
+
+	msg := <-svc.outbound
+	event, ok := msg.(taskCompletedEvent)
+	if !ok {
+		t.Fatalf("unexpected event type: %T", msg)
+	}
+	if len([]rune(event.Output)) > maxTaskOutputChars {
+		t.Fatalf("task.completed output exceeds max chars: got=%d max=%d", len([]rune(event.Output)), maxTaskOutputChars)
+	}
+	if !strings.Contains(event.Output, "[truncated") {
+		t.Fatalf("expected truncation marker in output")
+	}
+
+	bytes, marshalErr := json.Marshal(event)
+	if marshalErr != nil {
+		t.Fatalf("marshal completed event: %v", marshalErr)
+	}
+	text := string(bytes)
+	if strings.Contains(text, "nodeId") || strings.Contains(text, "agentToken") {
+		t.Fatalf("task.completed must not include auth fields, payload=%s", text)
 	}
 }

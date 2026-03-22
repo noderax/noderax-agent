@@ -24,6 +24,7 @@ import (
 const (
 	defaultRealtimeNamespace = "/agent-realtime"
 	defaultRealtimePath      = "/socket.io/"
+	maxTaskOutputChars       = 8000
 )
 
 type AuthSuccessHook func(context.Context)
@@ -174,13 +175,11 @@ func (s *Service) Run(ctx context.Context) error {
 }
 
 func (s *Service) TaskAccepted(ctx context.Context, taskID string, timestamp time.Time) error {
-	nodeID, agentToken := s.credentials()
+	s.logger.Debug("emitting lifecycle event", "event", EventTaskAccepted, "task_id", taskID, "payload_keys", "type,taskId,timestamp")
 	err := s.enqueueCritical(ctx, taskAcceptedEvent{
-		Type:       EventTaskAccepted,
-		NodeID:     nodeID,
-		AgentToken: agentToken,
-		TaskID:     taskID,
-		Timestamp:  formatTimestampUTCMillis(timestamp),
+		Type:      EventTaskAccepted,
+		TaskID:    taskID,
+		Timestamp: formatTimestampUTCMillis(timestamp),
 	})
 	if err == nil {
 		s.lifecycleSent.Add(1)
@@ -189,13 +188,11 @@ func (s *Service) TaskAccepted(ctx context.Context, taskID string, timestamp tim
 }
 
 func (s *Service) TaskStarted(ctx context.Context, taskID string, timestamp time.Time) error {
-	nodeID, agentToken := s.credentials()
+	s.logger.Debug("emitting lifecycle event", "event", EventTaskStarted, "task_id", taskID, "payload_keys", "type,taskId,timestamp")
 	err := s.enqueueCritical(ctx, taskStartedEvent{
-		Type:       EventTaskStarted,
-		NodeID:     nodeID,
-		AgentToken: agentToken,
-		TaskID:     taskID,
-		Timestamp:  formatTimestampUTCMillis(timestamp),
+		Type:      EventTaskStarted,
+		TaskID:    taskID,
+		Timestamp: formatTimestampUTCMillis(timestamp),
 	})
 	if err == nil {
 		s.lifecycleSent.Add(1)
@@ -204,15 +201,13 @@ func (s *Service) TaskStarted(ctx context.Context, taskID string, timestamp time
 }
 
 func (s *Service) TaskLog(ctx context.Context, taskID, stream, line string, timestamp time.Time) error {
-	nodeID, agentToken := s.credentials()
+	s.logger.Debug("emitting lifecycle event", "event", EventTaskLog, "task_id", taskID, "payload_keys", "type,taskId,stream,line,timestamp")
 	err := s.enqueueBestEffort(taskLogEvent{
-		Type:       EventTaskLog,
-		NodeID:     nodeID,
-		AgentToken: agentToken,
-		TaskID:     taskID,
-		Stream:     stream,
-		Line:       line,
-		Timestamp:  formatTimestampUTCMillis(timestamp),
+		Type:      EventTaskLog,
+		TaskID:    taskID,
+		Stream:    stream,
+		Line:      line,
+		Timestamp: formatTimestampUTCMillis(timestamp),
 	})
 	if err == nil {
 		s.lifecycleSent.Add(1)
@@ -221,22 +216,23 @@ func (s *Service) TaskLog(ctx context.Context, taskID, stream, line string, time
 }
 
 func (s *Service) TaskCompleted(ctx context.Context, event api.CompleteTaskRequest) error {
-	nodeID, agentToken := s.credentials()
-	if event.NodeID != "" {
-		nodeID = event.NodeID
-	}
-	if event.AgentToken != "" {
-		agentToken = event.AgentToken
-	}
-	
+	boundedOutput, truncated := truncateTaskOutput(event.Output, maxTaskOutputChars)
+	outputLength := len([]rune(boundedOutput))
+	s.logger.Debug(
+		"emitting lifecycle event",
+		"event", EventTaskComplete,
+		"task_id", event.TaskID,
+		"payload_keys", "type,taskId,status,result,output,exitCode,error,timestamp,durationMs",
+		"output_truncated", truncated,
+		"output_length", outputLength,
+	)
+
 	err := s.enqueueCritical(ctx, taskCompletedEvent{
 		Type:       EventTaskComplete,
-		NodeID:     nodeID,
-		AgentToken: agentToken,
 		TaskID:     event.TaskID,
 		Status:     event.Status,
 		Result:     event.Result,
-		Output:     event.Output,
+		Output:     boundedOutput,
 		ExitCode:   event.ExitCode,
 		Error:      event.Error,
 		DurationMS: event.DurationMS,
@@ -751,6 +747,27 @@ func sanitizeUsageOrZero(value float64) float64 {
 		return 0
 	}
 	return *v
+}
+
+func truncateTaskOutput(output string, maxChars int) (string, bool) {
+	runes := []rune(output)
+	if maxChars <= 0 || len(runes) <= maxChars {
+		return output, false
+	}
+
+	removed := len(runes) - maxChars
+	marker := fmt.Sprintf("\n...[truncated %d chars]...\n", removed)
+	markerRunes := []rune(marker)
+	if len(markerRunes) >= maxChars {
+		return string(runes[:maxChars]), true
+	}
+
+	remaining := maxChars - len(markerRunes)
+	head := remaining / 2
+	tail := remaining - head
+
+	truncated := string(runes[:head]) + marker + string(runes[len(runes)-tail:])
+	return truncated, true
 }
 
 func backoffDelay(attempt int, jitterRatio float64) time.Duration {
