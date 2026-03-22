@@ -452,8 +452,11 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 func (s *Service) runConnection(ctx context.Context, conn *socketIOConn) error {
 	defer conn.manager.Close()
 
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	errCh := make(chan error, 1)
-	go s.writeLoop(ctx, conn.socket, errCh)
+	go s.writeLoop(subCtx, conn.socket, errCh)
 
 	select {
 	case <-ctx.Done():

@@ -664,9 +664,13 @@ func parsePackageList(output string, onLog func(string, string)) any {
 	}
 
 	hasOutput := len(strings.TrimSpace(output)) > 0
-	if hasOutput && len(results) == 0 {
+	if !hasOutput {
 		if onLog != nil {
-			emitLog(onLog, "system", "parse failure: unable to extract any packages from output")
+			emitLog(onLog, "system", "error: command output is completely empty")
+		}
+	} else if len(results) == 0 {
+		if onLog != nil {
+			emitLog(onLog, "system", "error: parse failure, unable to extract any packages from output (parse count is zero)")
 		}
 		return nil
 	}

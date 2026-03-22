@@ -71,6 +71,8 @@ func (s *Service) SetRealtimeEvents(events RealtimeTaskEvents) {
 }
 
 func (s *Service) DispatchRealtimeTask(ctx context.Context, task api.Task) bool {
+	s.logger.Info("dispatch received", "task_id", task.ID, "type", task.Type)
+
 	if realtime := s.realtimeEvents(); realtime != nil {
 		realtime.ReportDispatchHandled()
 	}
@@ -81,11 +83,11 @@ func (s *Service) DispatchRealtimeTask(ctx context.Context, task api.Task) bool 
 	}
 
 	s.wg.Add(1)
-	go s.handleTask(ctx, task)
+	go s.handleTask(ctx, task, time.Now())
 	return true
 }
 
-func (s *Service) handleTask(parentCtx context.Context, task api.Task) {
+func (s *Service) handleTask(parentCtx context.Context, task api.Task, receivedAt time.Time) {
 	defer s.wg.Done()
 	defer s.unmarkRunning(task.ID)
 
@@ -101,13 +103,30 @@ func (s *Service) handleTask(parentCtx context.Context, task api.Task) {
 		return
 	}
 
-	startedAt := time.Now().UTC()
-	if err := realtime.TaskAccepted(parentCtx, task.ID, startedAt); err != nil {
+	watchdog := make(chan struct{})
+	go func() {
+		select {
+		case <-watchdog:
+			return
+		case <-time.After(2 * time.Second):
+			s.logger.Warn("watchdog: queued task not started within 2s", "task_id", task.ID, "type", task.Type)
+		}
+	}()
+
+	acceptedAt := time.Now().UTC()
+	if err := realtime.TaskAccepted(parentCtx, task.ID, acceptedAt); err != nil {
 		s.logger.Warn("failed to emit realtime task.accepted event", "task_id", task.ID, "error", err)
+	} else {
+		s.logger.Info("task accepted sent", "task_id", task.ID)
 	}
+
+	startedAt := time.Now().UTC()
 	if err := realtime.TaskStarted(parentCtx, task.ID, startedAt); err != nil {
 		s.logger.Warn("failed to emit realtime task.started event", "task_id", task.ID, "error", err)
+	} else {
+		s.logger.Info("task started sent", "task_id", task.ID)
 	}
+	close(watchdog)
 
 	s.logger.Info("task started", "task_id", task.ID, "type", task.Type)
 
@@ -160,6 +179,7 @@ func (s *Service) handleTask(parentCtx context.Context, task api.Task) {
 	})
 	if completeErr == nil {
 		completeSent = true
+		s.logger.Info("task completed sent", "task_id", task.ID, "status", status, "pkg_count", pkgCount)
 	}
 	if completeErr != nil {
 		s.logger.Error("failed to complete task", "task_id", task.ID, "error", completeErr)
