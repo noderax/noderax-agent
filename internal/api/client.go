@@ -120,6 +120,14 @@ func (c *Client) ReportTaskCompleted(ctx context.Context, request TaskCompletedR
 	return c.post(ctx, apiPath(fmt.Sprintf("/agent/tasks/%s/completed", url.PathEscape(request.TaskID))), request, nil)
 }
 
+func (c *Client) GetTaskControl(ctx context.Context, taskID string) (TaskControlResponse, error) {
+	var response TaskControlResponse
+	if err := c.get(ctx, apiPath(fmt.Sprintf("/agent/tasks/%s/control", url.PathEscape(taskID))), &response); err != nil {
+		return TaskControlResponse{}, err
+	}
+	return response, nil
+}
+
 func (c *Client) post(ctx context.Context, path string, request any, result any) error {
 	apiErr := &ErrorResponse{}
 	req := c.http.R().

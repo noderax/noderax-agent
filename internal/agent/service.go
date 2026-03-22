@@ -51,6 +51,7 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		identity.Credentials,
 	)
 	taskService.SetTaskPollingClient(client, cfg.TaskPollInterval)
+	taskService.SetTaskControlClient(client)
 	taskService.SetTaskAuthClient(client)
 	taskService.SetRealtimeEvents(tasks.NewHTTPTaskEvents(client, logger))
 

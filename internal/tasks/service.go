@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ type Service struct {
 	executor       *ShellExecutor
 	realtime       RealtimeTaskEvents
 	taskClient     TaskPollingClient
+	taskControl    TaskControlClient
 	authClient     TaskAuthClient
 	taskPollPeriod time.Duration
 
@@ -30,12 +32,22 @@ type TaskPollingClient interface {
 	ClaimTask(context.Context, api.ClaimTaskRequest) (api.ClaimTaskResponse, error)
 }
 
+type TaskControlClient interface {
+	GetTaskControl(context.Context, string) (api.TaskControlResponse, error)
+}
+
 type TaskAuthClient interface {
 	SetAgentToken(string)
 	SetAgentNodeID(string)
 }
 
-const taskClaimEndpoint = "/api/v1/agent/tasks/claim"
+const (
+	taskClaimEndpoint        = "/api/v1/agent/tasks/claim"
+	taskControlEndpoint      = "/api/v1/agent/tasks/{taskId}/control"
+	taskControlPollInterval  = 2 * time.Second
+)
+
+var errTaskCancelledByControl = errors.New("task cancelled by control endpoint")
 
 type RealtimeTaskEvents interface {
 	TaskAccepted(context.Context, string, time.Time) error
@@ -104,6 +116,12 @@ func (s *Service) SetTaskPollingClient(client TaskPollingClient, period time.Dur
 	s.taskPollPeriod = period
 }
 
+func (s *Service) SetTaskControlClient(client TaskControlClient) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.taskControl = client
+}
+
 func (s *Service) SetRealtimeEvents(events RealtimeTaskEvents) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -147,6 +165,12 @@ func (s *Service) authConfig() TaskAuthClient {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.authClient
+}
+
+func (s *Service) taskControlConfig() TaskControlClient {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.taskControl
 }
 
 func (s *Service) pollTasks(ctx context.Context, client TaskPollingClient, period time.Duration) {
@@ -374,8 +398,37 @@ func (s *Service) handleTask(parentCtx context.Context, task api.Task, receivedA
 	taskCtx, cancel := context.WithTimeout(parentCtx, s.executor.TimeoutFor(task))
 	defer cancel()
 
+	controlDone := make(chan struct{})
+	var controlMu sync.Mutex
+	controlCancelled := false
+	controlCancelReason := ""
+	markCancelled := func(reason string) {
+		controlMu.Lock()
+		defer controlMu.Unlock()
+		if controlCancelled {
+			return
+		}
+		controlCancelled = true
+		controlCancelReason = strings.TrimSpace(reason)
+	}
+	controlState := func() (bool, string) {
+		controlMu.Lock()
+		defer controlMu.Unlock()
+		return controlCancelled, controlCancelReason
+	}
+
+	if controlClient := s.taskControlConfig(); controlClient != nil {
+		go s.watchTaskControl(taskCtx, task.ID, controlClient, cancel, markCancelled, controlDone)
+	}
+
 	result, execErr := s.executor.Execute(taskCtx, task, logSink.Enqueue)
+	close(controlDone)
 	logSink.Close()
+
+	cancelledByControl, cancelReason := controlState()
+	if cancelledByControl && (execErr == nil || errors.Is(execErr, context.Canceled)) {
+		execErr = errTaskCancelledByControl
+	}
 
 	status = taskStatus(execErr)
 	if execErr != nil {
@@ -385,6 +438,62 @@ func (s *Service) handleTask(parentCtx context.Context, task api.Task, receivedA
 	duration = result.Duration
 	resultData = result.Result
 	outputData = result.Output
+
+	if errors.Is(execErr, errTaskCancelledByControl) {
+		if cancelReason != "" {
+			errorMessage = cancelReason
+		}
+		if strings.TrimSpace(outputData) == "" {
+			if cancelReason != "" {
+				outputData = fmt.Sprintf("task cancelled by control request: %s", cancelReason)
+			} else {
+				outputData = "task cancelled by control request"
+			}
+		}
+	}
+}
+
+func (s *Service) watchTaskControl(
+	ctx context.Context,
+	taskID string,
+	client TaskControlClient,
+	cancel func(),
+	markCancelled func(string),
+	done <-chan struct{},
+) {
+	ticker := time.NewTicker(taskControlPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-ticker.C:
+			checkCtx, checkCancel := context.WithTimeout(ctx, s.requestTimeout)
+			control, err := client.GetTaskControl(checkCtx, taskID)
+			checkCancel()
+			if err != nil {
+				if reqErr, ok := asRequestError(err); ok {
+					s.logger.Warn("task control check failed", "endpoint", taskControlEndpoint, "task_id", taskID, "status_code", reqErr.StatusCode, "message", reqErr.Message, "body", reqErr.Body)
+				} else {
+					s.logger.Warn("task control check failed", "endpoint", taskControlEndpoint, "task_id", taskID, "error", err)
+				}
+				continue
+			}
+
+			s.logger.Debug("task control response", "endpoint", taskControlEndpoint, "task_id", taskID, "status", control.Status, "cancel_requested", control.CancelRequested)
+
+			if control.CancelRequested {
+				reason := strings.TrimSpace(control.CancelReason)
+				markCancelled(reason)
+				s.logger.Warn("task cancellation requested", "task_id", taskID, "reason", reason)
+				cancel()
+				return
+			}
+		}
+	}
 }
 
 func (s *Service) realtimeEvents() RealtimeTaskEvents {
@@ -415,6 +524,8 @@ func taskStatus(err error) string {
 	switch {
 	case err == nil:
 		return "success"
+	case errors.Is(err, errTaskCancelledByControl):
+		return "cancelled"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout"
 	case errors.Is(err, context.Canceled):

@@ -148,6 +148,14 @@ type TaskCompletedRequest struct {
 	DurationMS int64  `json:"durationMs"`
 }
 
+type TaskControlResponse struct {
+	TaskID            string     `json:"taskId"`
+	Status            string     `json:"status"`
+	CancelRequested   bool       `json:"cancelRequested"`
+	CancelRequestedAt *time.Time `json:"cancelRequestedAt,omitempty"`
+	CancelReason      string     `json:"cancelReason,omitempty"`
+}
+
 type ErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`
