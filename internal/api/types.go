@@ -110,6 +110,44 @@ type CompleteTaskRequest struct {
 	DurationMS  int64     `json:"durationMs"`
 }
 
+type ClaimTaskRequest struct {
+	MaxTasks     int      `json:"maxTasks,omitempty"`
+	WaitMS       int      `json:"waitMs,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+type ClaimTaskResponse struct {
+	Task *Task `json:"task,omitempty"`
+}
+
+type TaskAcceptedRequest struct {
+	TaskID    string `json:"taskId"`
+	Timestamp string `json:"timestamp"`
+}
+
+type TaskStartedRequest struct {
+	TaskID    string `json:"taskId"`
+	Timestamp string `json:"timestamp"`
+}
+
+type TaskLogRequest struct {
+	TaskID    string `json:"taskId"`
+	Stream    string `json:"stream"`
+	Line      string `json:"line"`
+	Timestamp string `json:"timestamp"`
+}
+
+type TaskCompletedRequest struct {
+	TaskID     string `json:"taskId"`
+	Status     string `json:"status"`
+	Result     any    `json:"result,omitempty"`
+	Output     string `json:"output,omitempty"`
+	ExitCode   int    `json:"exitCode"`
+	Error      string `json:"error,omitempty"`
+	Timestamp  string `json:"timestamp"`
+	DurationMS int64  `json:"durationMs"`
+}
+
 type ErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`

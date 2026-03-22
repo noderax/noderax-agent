@@ -29,6 +29,12 @@ type Service struct {
 	initErr  error
 }
 
+type noopRealtimeTaskDispatcher struct{}
+
+func (noopRealtimeTaskDispatcher) DispatchRealtimeTask(context.Context, api.Task) bool {
+	return false
+}
+
 func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, version string) *Service {
 	identity := NewIdentityManager(Identity{
 		NodeID:     cfg.NodeID,
@@ -44,6 +50,9 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		cfg.TaskTimeout,
 		identity.Credentials,
 	)
+	taskService.SetTaskPollingClient(client, cfg.TaskPollInterval)
+	taskService.SetTaskAuthClient(client)
+	taskService.SetRealtimeEvents(tasks.NewHTTPTaskEvents(client, logger))
 
 	metricsService := metrics.NewService(
 		nil,
@@ -63,7 +72,7 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		cfg.RealtimeBackoffJitter,
 		logger,
 		identity.Credentials,
-		taskService,
+		noopRealtimeTaskDispatcher{},
 		func(context.Context) {
 			metricsService.TriggerImmediateSnapshot()
 		},
@@ -72,7 +81,6 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		logger.Error("failed to initialize realtime service", "error", err)
 	}
 	metricsService.SetRealtimeClient(realtimeService)
-	taskService.SetRealtimeEvents(realtimeService)
 
 	return &Service{
 		cfg:      cfg,
@@ -142,12 +150,14 @@ func (s *Service) Run(ctx context.Context) error {
 func (s *Service) bootstrapIdentity(ctx context.Context) error {
 	if current := s.identity.Current(); current.Ready() {
 		s.client.SetAgentToken(current.AgentToken)
+		s.client.SetAgentNodeID(current.NodeID)
 		return nil
 	}
 
 	if identity, err := s.store.Load(); err == nil && identity.Ready() {
 		s.identity.Set(identity)
 		s.client.SetAgentToken(identity.AgentToken)
+		s.client.SetAgentNodeID(identity.NodeID)
 		s.logger.Info("loaded persisted agent identity", "node_id", identity.NodeID, "path", s.cfg.StateFile)
 		return nil
 	} else if err != nil && !errors.Is(err, ErrIdentityNotFound) {
@@ -174,6 +184,7 @@ func (s *Service) bootstrapIdentity(ctx context.Context) error {
 
 	s.identity.Set(identity)
 	s.client.SetAgentToken(identity.AgentToken)
+	s.client.SetAgentNodeID(identity.NodeID)
 	s.logger.Info("agent enrollment approved", "node_id", identity.NodeID)
 	return nil
 }

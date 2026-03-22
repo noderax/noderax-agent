@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -16,11 +17,25 @@ type Service struct {
 	credentials    func() (string, string)
 	executor       *ShellExecutor
 	realtime       RealtimeTaskEvents
+	taskClient     TaskPollingClient
+	authClient     TaskAuthClient
+	taskPollPeriod time.Duration
 
 	mu      sync.Mutex
 	running map[string]struct{}
 	wg      sync.WaitGroup
 }
+
+type TaskPollingClient interface {
+	ClaimTask(context.Context, api.ClaimTaskRequest) (api.ClaimTaskResponse, error)
+}
+
+type TaskAuthClient interface {
+	SetAgentToken(string)
+	SetAgentNodeID(string)
+}
+
+const taskClaimEndpoint = "/api/v1/agent/tasks/claim"
 
 type RealtimeTaskEvents interface {
 	TaskAccepted(context.Context, string, time.Time) error
@@ -47,6 +62,18 @@ func NewService(
 }
 
 func (s *Service) Run(ctx context.Context) error {
+	client, period := s.pollingConfig()
+	clientState := "nil"
+	if client != nil {
+		clientState = "not-nil"
+	}
+	s.logger.Debug("task polling enabled", "interval", period, "task_client", clientState)
+	if client == nil {
+		s.logger.Error("task polling client is nil; task claiming cannot start")
+		return fmt.Errorf("task polling client is nil")
+	}
+	go s.pollTasks(ctx, client, period)
+
 	<-ctx.Done()
 
 	done := make(chan struct{})
@@ -64,6 +91,19 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 }
 
+func (s *Service) SetTaskAuthClient(client TaskAuthClient) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.authClient = client
+}
+
+func (s *Service) SetTaskPollingClient(client TaskPollingClient, period time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.taskClient = client
+	s.taskPollPeriod = period
+}
+
 func (s *Service) SetRealtimeEvents(events RealtimeTaskEvents) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -71,10 +111,20 @@ func (s *Service) SetRealtimeEvents(events RealtimeTaskEvents) {
 }
 
 func (s *Service) DispatchRealtimeTask(ctx context.Context, task api.Task) bool {
+	return s.dispatchTask(ctx, task, "realtime")
+}
+
+func (s *Service) dispatchTask(ctx context.Context, task api.Task, source string) bool {
 	s.logger.Info("dispatch received", "task_id", task.ID, "type", task.Type)
 
-	if realtime := s.realtimeEvents(); realtime != nil {
-		realtime.ReportDispatchHandled()
+	if source == "realtime" {
+		if realtime := s.realtimeEvents(); realtime != nil {
+			realtime.ReportDispatchHandled()
+		}
+	}
+
+	if source == "polling" {
+		s.logger.Debug("dispatch source", "task_id", task.ID, "source", source)
 	}
 
 	if !s.markRunning(task.ID) {
@@ -85,6 +135,146 @@ func (s *Service) DispatchRealtimeTask(ctx context.Context, task api.Task) bool 
 	s.wg.Add(1)
 	go s.handleTask(ctx, task, time.Now())
 	return true
+}
+
+func (s *Service) pollingConfig() (TaskPollingClient, time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.taskClient, s.taskPollPeriod
+}
+
+func (s *Service) authConfig() TaskAuthClient {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.authClient
+}
+
+func (s *Service) pollTasks(ctx context.Context, client TaskPollingClient, period time.Duration) {
+	if period <= 0 {
+		period = 15 * time.Second
+	}
+
+	waitMS := int(period.Milliseconds())
+	if waitMS <= 0 {
+		waitMS = 15000
+	}
+
+	networkBackoff := time.Second
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+
+		nodeID, _ := s.credentials()
+		claimRequest := api.ClaimTaskRequest{MaxTasks: 1, WaitMS: waitMS}
+		s.logger.Debug("claiming task over HTTP", "node_id", nodeID, "endpoint", taskClaimEndpoint, "max_tasks", claimRequest.MaxTasks, "wait_ms", claimRequest.WaitMS)
+
+		claimTimeout := s.requestTimeout + period + time.Second
+		claimCtx, cancel := context.WithTimeout(ctx, claimTimeout)
+		response, err := client.ClaimTask(claimCtx, claimRequest)
+		cancel()
+		if err != nil {
+			if reqErr, ok := asRequestError(err); ok {
+				s.logger.Warn("task claim failed", "endpoint", taskClaimEndpoint, "status_code", reqErr.StatusCode, "message", reqErr.Message, "body", reqErr.Body)
+			} else {
+				s.logger.Warn("task claim failed", "endpoint", taskClaimEndpoint, "error", err)
+			}
+
+			if isAuthError(err) {
+				nodeID, token := s.credentials()
+				authClient := s.authConfig()
+				if authClient != nil {
+					authClient.SetAgentToken(token)
+					authClient.SetAgentNodeID(nodeID)
+					s.logger.Warn("task claim auth failed; refreshed agent auth headers and retrying once", "endpoint", taskClaimEndpoint, "node_id", nodeID)
+				} else {
+					s.logger.Error("task claim auth failed but task auth client is nil; cannot refresh headers")
+				}
+
+				retryCtx, retryCancel := context.WithTimeout(ctx, claimTimeout)
+				retryResponse, retryErr := client.ClaimTask(retryCtx, claimRequest)
+				retryCancel()
+				if retryErr == nil {
+					response = retryResponse
+					err = nil
+				} else {
+					err = retryErr
+					if reqErr, ok := asRequestError(err); ok {
+						s.logger.Warn("task claim retry failed", "endpoint", taskClaimEndpoint, "status_code", reqErr.StatusCode, "message", reqErr.Message, "body", reqErr.Body)
+					} else {
+						s.logger.Warn("task claim retry failed", "endpoint", taskClaimEndpoint, "error", err)
+					}
+				}
+			}
+
+			if err != nil {
+				if isAuthError(err) {
+					s.logger.Error("task claim unauthorized after retry; stopping polling loop", "endpoint", taskClaimEndpoint)
+					return
+				}
+
+				if isStateConflict(err) {
+					s.logger.Warn("task claim state conflict; skipping to next claim", "endpoint", taskClaimEndpoint)
+					continue
+				}
+
+				if isNetworkError(err) {
+					s.logger.Warn("task claim network error; backing off", "endpoint", taskClaimEndpoint, "backoff", networkBackoff)
+					if !sleepWithContext(ctx, networkBackoff) {
+						return
+					}
+					networkBackoff = minDuration(networkBackoff*2, 15*time.Second)
+					continue
+				}
+
+				s.logger.Warn("task claim remains unavailable; realtime dispatch fallback is disabled", "endpoint", taskClaimEndpoint)
+				if !sleepWithContext(ctx, minDuration(period/3, 2*time.Second)) {
+					return
+				}
+				continue
+			}
+		}
+
+		networkBackoff = time.Second
+
+		if response.Task == nil || response.Task.ID == "" {
+			s.logger.Debug("task claim returned empty", "endpoint", taskClaimEndpoint)
+			continue
+		}
+
+		s.logger.Info("task claim succeeded", "task_id", response.Task.ID, "task_type", response.Task.Type)
+		s.dispatchTask(ctx, *response.Task, "polling")
+	}
+}
+
+func asRequestError(err error) (*api.RequestError, bool) {
+	var reqErr *api.RequestError
+	if errors.As(err, &reqErr) {
+		return reqErr, true
+	}
+	return nil, false
+}
+
+func isAuthError(err error) bool {
+	reqErr, ok := asRequestError(err)
+	if !ok {
+		return false
+	}
+	return reqErr.StatusCode == 401 || reqErr.StatusCode == 403
+}
+
+func isStateConflict(err error) bool {
+	reqErr, ok := asRequestError(err)
+	if !ok {
+		return false
+	}
+	return reqErr.StatusCode == 404 || reqErr.StatusCode == 409
+}
+
+func isNetworkError(err error) bool {
+	_, ok := asRequestError(err)
+	return !ok
 }
 
 func (s *Service) handleTask(parentCtx context.Context, task api.Task, receivedAt time.Time) {
@@ -232,6 +422,25 @@ func taskStatus(err error) string {
 	default:
 		return "failed"
 	}
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 type realtimeTaskLogSink struct {

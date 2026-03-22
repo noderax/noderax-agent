@@ -1,5 +1,5 @@
 {
-  "api_url": "https://noderax-api-production.up.railway.app",
+  "api_url": "http://api.noderax-api.orb.local",
   "enrollment_token": "",
   "node_id": "",
   "agent_token": "",
@@ -16,5 +16,5 @@
   "realtime_namespace": "/agent-realtime",
   "realtime_path": "/socket.io/",
   "state_file": "/usr/local/var/lib/noderax-agent/agent_identity.json",
-  "log_level": "info"
+  "log_level": "debug"
 }
