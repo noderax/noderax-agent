@@ -101,6 +101,9 @@ func NewService(
 	if jitterRatio > 1 {
 		jitterRatio = 1
 	}
+	if pingInterval > 2*time.Second {
+		logger.Warn("realtime ping interval may be too high and can trigger server disconnect", "ping_interval", pingInterval, "recommended_max", 2*time.Second)
+	}
 	if onAuthSuccess == nil {
 		onAuthSuccess = func(context.Context) {}
 	}
