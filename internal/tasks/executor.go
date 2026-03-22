@@ -86,7 +86,9 @@ type execCommandRunner struct {
 }
 
 func newExecCommandRunner(ctx context.Context, name string, args ...string) commandRunner {
-	return &execCommandRunner{cmd: exec.CommandContext(ctx, name, args...)}
+	cmd := exec.CommandContext(ctx, name, args...)
+	prepareCommand(cmd)
+	return &execCommandRunner{cmd: cmd}
 }
 
 func (r *execCommandRunner) SetEnv(env []string) {
