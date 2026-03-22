@@ -86,27 +86,35 @@ type metricsEvent struct {
 }
 
 type taskAcceptedEvent struct {
-	Type      string `json:"type"`
-	TaskID    string `json:"taskId"`
-	Timestamp string `json:"timestamp"`
+	Type       string `json:"type"`
+	NodeID     string `json:"nodeId,omitempty"`
+	AgentToken string `json:"agentToken,omitempty"`
+	TaskID     string `json:"taskId"`
+	Timestamp  string `json:"timestamp"`
 }
 
 type taskStartedEvent struct {
-	Type      string `json:"type"`
-	TaskID    string `json:"taskId"`
-	Timestamp string `json:"timestamp"`
+	Type       string `json:"type"`
+	NodeID     string `json:"nodeId,omitempty"`
+	AgentToken string `json:"agentToken,omitempty"`
+	TaskID     string `json:"taskId"`
+	Timestamp  string `json:"timestamp"`
 }
 
 type taskLogEvent struct {
-	Type      string `json:"type"`
-	TaskID    string `json:"taskId"`
-	Stream    string `json:"stream"`
-	Line      string `json:"line"`
-	Timestamp string `json:"timestamp"`
+	Type       string `json:"type"`
+	NodeID     string `json:"nodeId,omitempty"`
+	AgentToken string `json:"agentToken,omitempty"`
+	TaskID     string `json:"taskId"`
+	Stream     string `json:"stream"`
+	Line       string `json:"line"`
+	Timestamp  string `json:"timestamp"`
 }
 
 type taskCompletedEvent struct {
 	Type       string `json:"type"`
+	NodeID     string `json:"nodeId,omitempty"`
+	AgentToken string `json:"agentToken,omitempty"`
 	TaskID     string `json:"taskId"`
 	Status     string `json:"status"`
 	Result     any    `json:"result,omitempty"`

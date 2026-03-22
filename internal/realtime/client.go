@@ -171,10 +171,13 @@ func (s *Service) Run(ctx context.Context) error {
 }
 
 func (s *Service) TaskAccepted(ctx context.Context, taskID string, timestamp time.Time) error {
+	nodeID, agentToken := s.credentials()
 	err := s.enqueueCritical(ctx, taskAcceptedEvent{
-		Type:      EventTaskAccepted,
-		TaskID:    taskID,
-		Timestamp: formatTimestampUTCMillis(timestamp),
+		Type:       EventTaskAccepted,
+		NodeID:     nodeID,
+		AgentToken: agentToken,
+		TaskID:     taskID,
+		Timestamp:  formatTimestampUTCMillis(timestamp),
 	})
 	if err == nil {
 		s.lifecycleSent.Add(1)
@@ -183,10 +186,13 @@ func (s *Service) TaskAccepted(ctx context.Context, taskID string, timestamp tim
 }
 
 func (s *Service) TaskStarted(ctx context.Context, taskID string, timestamp time.Time) error {
+	nodeID, agentToken := s.credentials()
 	err := s.enqueueCritical(ctx, taskStartedEvent{
-		Type:      EventTaskStarted,
-		TaskID:    taskID,
-		Timestamp: formatTimestampUTCMillis(timestamp),
+		Type:       EventTaskStarted,
+		NodeID:     nodeID,
+		AgentToken: agentToken,
+		TaskID:     taskID,
+		Timestamp:  formatTimestampUTCMillis(timestamp),
 	})
 	if err == nil {
 		s.lifecycleSent.Add(1)
@@ -195,12 +201,15 @@ func (s *Service) TaskStarted(ctx context.Context, taskID string, timestamp time
 }
 
 func (s *Service) TaskLog(ctx context.Context, taskID, stream, line string, timestamp time.Time) error {
+	nodeID, agentToken := s.credentials()
 	err := s.enqueueBestEffort(taskLogEvent{
-		Type:      EventTaskLog,
-		TaskID:    taskID,
-		Stream:    stream,
-		Line:      line,
-		Timestamp: formatTimestampUTCMillis(timestamp),
+		Type:       EventTaskLog,
+		NodeID:     nodeID,
+		AgentToken: agentToken,
+		TaskID:     taskID,
+		Stream:     stream,
+		Line:       line,
+		Timestamp:  formatTimestampUTCMillis(timestamp),
 	})
 	if err == nil {
 		s.lifecycleSent.Add(1)
@@ -209,8 +218,18 @@ func (s *Service) TaskLog(ctx context.Context, taskID, stream, line string, time
 }
 
 func (s *Service) TaskCompleted(ctx context.Context, event api.CompleteTaskRequest) error {
+	nodeID, agentToken := s.credentials()
+	if event.NodeID != "" {
+		nodeID = event.NodeID
+	}
+	if event.AgentToken != "" {
+		agentToken = event.AgentToken
+	}
+	
 	err := s.enqueueCritical(ctx, taskCompletedEvent{
 		Type:       EventTaskComplete,
+		NodeID:     nodeID,
+		AgentToken: agentToken,
 		TaskID:     event.TaskID,
 		Status:     event.Status,
 		Result:     event.Result,
@@ -322,13 +341,42 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 			return
 		}
 
+		s.logger.Info("raw socket.io dispatch payload received", "raw_json", string(bytes))
+
 		var maybeEnvelope inboundEnvelope
-		if err := json.Unmarshal(bytes, &maybeEnvelope); err == nil && maybeEnvelope.Task != nil {
+		if err := json.Unmarshal(bytes, &maybeEnvelope); err == nil && maybeEnvelope.Task != nil && (maybeEnvelope.Task.ID != "" || maybeEnvelope.Task.Type != "") {
 			envelope = maybeEnvelope
 		} else {
+			// It might be a direct Task object, possibly using alternative field names
+			// We'll normalize it using a generic map first
+			var rawMap map[string]any
+			if err := json.Unmarshal(bytes, &rawMap); err == nil {
+				if id, ok := rawMap["taskId"].(string); ok && id != "" {
+					rawMap["id"] = id
+				}
+				if action, ok := rawMap["action"].(string); ok && action != "" {
+					rawMap["type"] = action
+				}
+				if data, ok := rawMap["data"]; ok {
+					rawMap["payload"] = data
+				}
+				if timeoutVal, ok := rawMap["timeout"]; ok {
+					if tFloat, ok := timeoutVal.(float64); ok {
+						rawMap["timeoutSeconds"] = int(tFloat)
+					}
+				}
+				if modifiedBytes, err := json.Marshal(rawMap); err == nil {
+					bytes = modifiedBytes
+				}
+			}
+
 			var task api.Task
 			if err := json.Unmarshal(bytes, &task); err != nil {
 				s.logger.Warn("failed to decode socket.io task payload", "error", err)
+				return
+			}
+			if task.ID == "" {
+				s.logger.Warn("decoded task is missing ID", "raw_json", string(bytes))
 				return
 			}
 			envelope.Task = &task
@@ -418,10 +466,32 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 		}
 	})
 
-	socket.OnEvent(EventTaskDispatch, func(payload map[string]any) {
+	socket.OnEvent(EventTaskDispatch, func(payload any, extra ...any) {
+		if len(extra) > 0 {
+			s.logger.Info("realtime multi-arg dispatch received", "args_count", 1+len(extra))
+			
+			// Check if any extra arg is the actual task
+			for _, arg := range extra {
+				if argMap, ok := arg.(map[string]any); ok {
+					if _, hasID := argMap["id"]; hasID {
+						dispatchEvent(arg)
+						return
+					}
+					if _, hasTaskID := argMap["taskId"]; hasTaskID {
+						dispatchEvent(arg)
+						return
+					}
+					if _, hasTask := argMap["task"]; hasTask {
+						dispatchEvent(arg)
+						return
+					}
+				}
+			}
+		}
+		
 		dispatchEvent(payload)
 	})
-	socket.OnEvent("message", func(payload map[string]any) {
+	socket.OnEvent("message", func(payload any) {
 		dispatchEvent(payload)
 	})
 
