@@ -13,9 +13,6 @@
   "realtime_backoff_jitter": 0.2,
   "realtime_namespace": "/agent-realtime",
   "realtime_path": "/socket.io/",
-  "realtime_backoff_min": "500ms",
-  "realtime_backoff_max": "15s",
-  "realtime_connect_timeout": "10s",
   "state_file": "data/agent_identity.json",
   "log_level": "info"
 }

@@ -146,12 +146,16 @@ Supported config keys:
 - `enrollment_token`
 - `node_id`
 - `agent_token`
+- `heartbeat_interval`
 - `metrics_interval`
+- `task_poll_interval`
 - `request_timeout`
 - `task_timeout`
 - `shutdown_timeout`
 - `realtime_enabled`
 - `realtime_ping_interval`
+- `realtime_queue_size`
+- `realtime_backoff_jitter`
 - `realtime_namespace`
 - `realtime_path`
 - `state_file`
