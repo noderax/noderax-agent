@@ -91,17 +91,62 @@ func (s *Service) handleTask(parentCtx context.Context, task api.Task, receivedA
 	defer s.wg.Done()
 	defer s.unmarkRunning(task.ID)
 
-	nodeID, agentToken := s.credentials()
-	if nodeID == "" || agentToken == "" {
-		s.logger.Error("cannot execute task because agent identity is missing", "task_id", task.ID)
-		return
-	}
-
 	realtime := s.realtimeEvents()
 	if realtime == nil {
 		s.logger.Error("cannot execute task because realtime events are unavailable", "task_id", task.ID)
 		return
 	}
+
+	nodeID, agentToken := s.credentials()
+
+	var status = "failed"
+	var errorMessage = ""
+	var exitCode = -1
+	var duration time.Duration
+	var resultData any
+	var outputData string
+
+	// Always ensure task is completed
+	defer func() {
+		completedAt := time.Now().UTC()
+		
+		pkgCount := 0
+		hasResult := resultData != nil
+		if hasResult {
+			if resultMap, ok := resultData.(map[string]any); ok {
+				if pkgs, ok := resultMap["packages"].([]PackageInfo); ok {
+					pkgCount = len(pkgs)
+				} else if res, ok := resultMap["results"].([]PackageInfo); ok {
+					pkgCount = len(res)
+				}
+			}
+		}
+
+		if errorMessage != "" {
+			s.logger.Warn("task finished with error", "task_id", task.ID, "status", status, "error", errorMessage, "has_result", hasResult)
+		} else {
+			s.logger.Info("task completed", "task_id", task.ID, "exit_code", exitCode, "duration", duration, "has_result", hasResult, "pkg_count", pkgCount)
+		}
+
+		completeErr := realtime.TaskCompleted(parentCtx, api.CompleteTaskRequest{
+			NodeID:      nodeID,
+			AgentToken:  agentToken,
+			TaskID:      task.ID,
+			Status:      status,
+			ExitCode:    exitCode,
+			Error:       errorMessage,
+			CompletedAt: completedAt,
+			DurationMS:  duration.Milliseconds(),
+			Result:      resultData,
+			Output:      outputData,
+		})
+		
+		if completeErr == nil {
+			s.logger.Info("task completed sent", "task_id", task.ID, "status", status, "pkg_count", pkgCount)
+		} else {
+			s.logger.Error("failed to send task completed event", "task_id", task.ID, "error", completeErr)
+		}
+	}()
 
 	watchdog := make(chan struct{})
 	go func() {
@@ -118,6 +163,13 @@ func (s *Service) handleTask(parentCtx context.Context, task api.Task, receivedA
 		s.logger.Warn("failed to emit realtime task.accepted event", "task_id", task.ID, "error", err)
 	} else {
 		s.logger.Info("task accepted sent", "task_id", task.ID)
+	}
+
+	if nodeID == "" || agentToken == "" {
+		errorMessage = "cannot execute task because agent identity is missing"
+		s.logger.Error(errorMessage, "task_id", task.ID)
+		close(watchdog)
+		return
 	}
 
 	startedAt := time.Now().UTC()
@@ -137,57 +189,14 @@ func (s *Service) handleTask(parentCtx context.Context, task api.Task, receivedA
 	result, execErr := s.executor.Execute(taskCtx, task, logSink.Enqueue)
 	logSink.Close()
 
-	status := taskStatus(execErr)
-	errorMessage := ""
-
-	hasResult := result.Result != nil
-	pkgCount := 0
-	if hasResult {
-		if resultMap, ok := result.Result.(map[string]any); ok {
-			if pkgs, ok := resultMap["packages"].([]PackageInfo); ok {
-				pkgCount = len(pkgs)
-			} else if res, ok := resultMap["results"].([]PackageInfo); ok {
-				pkgCount = len(res)
-			}
-		}
-	}
-
+	status = taskStatus(execErr)
 	if execErr != nil {
 		errorMessage = execErr.Error()
-		s.logger.Warn("task finished with error", "task_id", task.ID, "status", status, "error", execErr, "has_result", hasResult)
-	} else {
-		s.logger.Info("task completed", "task_id", task.ID, "exit_code", result.ExitCode, "duration", result.Duration, "has_result", hasResult, "pkg_count", pkgCount)
 	}
-
-	completedAt := result.CompletedAt
-	if completedAt.IsZero() {
-		completedAt = time.Now().UTC()
-	}
-
-	completeSent := false
-	completeErr := realtime.TaskCompleted(parentCtx, api.CompleteTaskRequest{
-		NodeID:      nodeID,
-		AgentToken:  agentToken,
-		TaskID:      task.ID,
-		Status:      status,
-		ExitCode:    result.ExitCode,
-		Error:       errorMessage,
-		CompletedAt: completedAt,
-		DurationMS:  result.Duration.Milliseconds(),
-		Result:      result.Result,
-		Output:      result.Output,
-	})
-	if completeErr == nil {
-		completeSent = true
-		s.logger.Info("task completed sent", "task_id", task.ID, "status", status, "pkg_count", pkgCount)
-	}
-	if completeErr != nil {
-		s.logger.Error("failed to complete task", "task_id", task.ID, "error", completeErr)
-	}
-
-	if !completeSent {
-		s.logger.Warn("task.completed event was not delivered", "task_id", task.ID)
-	}
+	exitCode = result.ExitCode
+	duration = result.Duration
+	resultData = result.Result
+	outputData = result.Output
 }
 
 func (s *Service) realtimeEvents() RealtimeTaskEvents {
