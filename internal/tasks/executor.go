@@ -295,6 +295,7 @@ func (e *ShellExecutor) packageListCommand() (commandSpec, error) {
 		return commandSpec{
 			name:         dpkgPath,
 			args:         args,
+			env:          map[string]string{"COLUMNS": "100000", "PAGER": "cat"},
 			startMessage: fmt.Sprintf("running %s", formatCommandForLog(dpkgPath, args)),
 			parseResult:  parsePackageList,
 		}, nil
@@ -309,6 +310,7 @@ func (e *ShellExecutor) packageListCommand() (commandSpec, error) {
 	return commandSpec{
 		name:         aptPath,
 		args:         args,
+		env:          map[string]string{"COLUMNS": "10000", "PAGER": "cat"},
 		startMessage: fmt.Sprintf("running %s", formatCommandForLog(aptPath, args)),
 		parseResult:  parsePackageList,
 	}, nil
@@ -348,6 +350,7 @@ func (e *ShellExecutor) packageSearchCommand(payload json.RawMessage) (commandSp
 	return commandSpec{
 		name:         aptPath,
 		args:         args,
+		env:          map[string]string{"COLUMNS": "10000", "PAGER": "cat"},
 		startMessage: fmt.Sprintf("running %s", formatCommandForLog(aptPath, args)),
 		parseResult:  parsePackageSearch,
 	}, nil
