@@ -394,9 +394,10 @@ func (s *Service) handleTask(parentCtx context.Context, task api.Task, receivedA
 
 	s.logger.Info("task started", "task_id", task.ID, "type", task.Type)
 
-	logSink := newRealtimeTaskLogSink(realtime, s.logger, task.ID)
 	taskCtx, cancel := context.WithTimeout(parentCtx, s.executor.TimeoutFor(task))
 	defer cancel()
+
+	logSink := newRealtimeTaskLogSink(taskCtx, realtime, s.logger, task.ID)
 
 	controlDone := make(chan struct{})
 	var controlMu sync.Mutex
@@ -558,15 +559,17 @@ type realtimeTaskLogSink struct {
 	realtime RealtimeTaskEvents
 	logger   *slog.Logger
 	taskID   string
+	ctx      context.Context
 	ch       chan api.TaskLogEntry
 	done     chan struct{}
 }
 
-func newRealtimeTaskLogSink(realtime RealtimeTaskEvents, logger *slog.Logger, taskID string) *realtimeTaskLogSink {
+func newRealtimeTaskLogSink(ctx context.Context, realtime RealtimeTaskEvents, logger *slog.Logger, taskID string) *realtimeTaskLogSink {
 	sink := &realtimeTaskLogSink{
 		realtime: realtime,
 		logger:   logger,
 		taskID:   taskID,
+		ctx:      ctx,
 		ch:       make(chan api.TaskLogEntry, 512),
 		done:     make(chan struct{}),
 	}
@@ -592,15 +595,33 @@ func (s *realtimeTaskLogSink) Enqueue(stream, line string) {
 
 func (s *realtimeTaskLogSink) Close() {
 	close(s.ch)
-	<-s.done
+	select {
+	case <-s.done:
+	case <-time.After(3 * time.Second):
+		s.logger.Warn("log sink drain timed out after 3s, proceeding to task completion", "task_id", s.taskID)
+	}
 }
 
 func (s *realtimeTaskLogSink) run() {
 	defer close(s.done)
 
 	for entry := range s.ch {
-		if err := s.realtime.TaskLog(context.Background(), s.taskID, entry.Stream, entry.Line, entry.Timestamp); err != nil {
+		if s.ctx.Err() != nil {
+			s.logger.Debug("log sink context cancelled, discarding remaining log entries", "task_id", s.taskID)
+			// drain channel without sending
+			for range s.ch {
+			}
+			return
+		}
+		if err := s.realtime.TaskLog(s.ctx, s.taskID, entry.Stream, entry.Line, entry.Timestamp); err != nil {
+			if s.ctx.Err() != nil {
+				s.logger.Debug("log sink context cancelled during send, discarding remaining", "task_id", s.taskID)
+				for range s.ch {
+				}
+				return
+			}
 			s.logger.Warn("failed to emit realtime task.log event", "task_id", s.taskID, "error", err)
 		}
 	}
 }
+
