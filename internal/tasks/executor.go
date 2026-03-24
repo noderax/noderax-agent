@@ -199,14 +199,16 @@ func (e *ShellExecutor) Execute(ctx context.Context, task api.Task, onLog func(s
 	var mx sync.Mutex
 	var outBuilder strings.Builder
 	captureLog := func(stream, line string) {
-		if stream == "stdout" {
-			mx.Lock()
-			if outBuilder.Len() < 1024*1024*2 { // 2MB limit
-				outBuilder.WriteString(line)
-				outBuilder.WriteByte('\n')
+		mx.Lock()
+		if outBuilder.Len() < 1024*1024*2 { // 2MB limit
+			if stream == "stderr" {
+				outBuilder.WriteString("[stderr] ")
 			}
-			mx.Unlock()
+			outBuilder.WriteString(line)
+			outBuilder.WriteByte('\n')
 		}
+		mx.Unlock()
+
 		if onLog != nil {
 			onLog(stream, line)
 		}
