@@ -11,6 +11,8 @@ Noderax Agent is a Go-based node agent that connects servers to the Noderax plat
 - Background service support for Ubuntu and macOS
 - Built-in CLI for install, start, stop, restart, status, and config updates
 - Realtime websocket events for metrics and task lifecycle
+- **Reliable Task Execution:** Support for task cancellation with log drain timeouts
+- **Non-interactive Environment:** Commands run with `PAGER=cat` and high `COLUMNS` to ensure stable output
 - Persistent identity storage for approved nodes
 
 ## Supported Platforms
@@ -205,6 +207,15 @@ The agent uses the following flow:
 4. Wait for approval from the web UI via `GET /api/v1/enrollments/{token}`.
 5. Persist the approved `nodeId` and `agentToken`.
 6. Start realtime websocket session and metrics/task execution loops.
+
+## Task Execution & Environment
+
+The agent executes `shell.exec` tasks in a controlled non-interactive environment:
+- **PAGER=cat:** Prevents commands from hanging in interactive pagers (e.g., `git log`, `apt`).
+- **COLUMNS=100000:** Ensures wide output lines are not truncated or wrapped prematurely.
+- **Cancellation:** Tasks can be cancelled via the API. The agent handles cancellation gracefully, ensuring all pending logs are drained with a 3-second timeout before the execution context is destroyed.
+
+For package management (`packageList`), the agent now uses optimized `dpkg -l` parsing on Debian/Ubuntu systems to provide structured package metadata (name, version, architecture, description).
 
 ## Project Structure
 
