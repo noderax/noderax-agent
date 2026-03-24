@@ -114,7 +114,8 @@ func (s *Service) collectAndSend(ctx context.Context) {
 			FreeBytes:   snapshot.Disk.FreeBytes,
 			UsedPercent: snapshot.Disk.UsedPercent,
 		},
-		Networks: mapNetworks(snapshot.Networks),
+		Networks:    mapNetworks(snapshot.Networks),
+		Temperature: snapshot.Temperature,
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) {

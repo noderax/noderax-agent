@@ -84,6 +84,7 @@ type MetricsRequest struct {
 	Memory      MemoryStats    `json:"memory"`
 	Disk        DiskStats      `json:"disk"`
 	Networks    []NetworkStats `json:"networks"`
+	Temperature float64        `json:"temperature,omitempty"`
 }
 
 type Task struct {

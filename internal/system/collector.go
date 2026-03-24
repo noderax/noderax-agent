@@ -10,6 +10,7 @@ import (
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/mem"
 	gonet "github.com/shirou/gopsutil/v4/net"
+	"github.com/shirou/gopsutil/v4/sensors"
 )
 
 type Snapshot struct {
@@ -18,6 +19,7 @@ type Snapshot struct {
 	Memory      MemoryStats
 	Disk        DiskStats
 	Networks    []NetworkStats
+	Temperature float64
 }
 
 type CPUStats struct {
@@ -81,6 +83,17 @@ func (c *Collector) Collect(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 
+	// Temperature collection is best-effort and should not block the snapshot if it fails
+	var maxTemp float64
+	temps, err := sensors.TemperaturesWithContext(ctx)
+	if err == nil {
+		for _, t := range temps {
+			if t.Temperature > maxTemp {
+				maxTemp = t.Temperature
+			}
+		}
+	}
+
 	networks := make([]NetworkStats, 0, len(networkCounters))
 	for _, item := range networkCounters {
 		networks = append(networks, NetworkStats{
@@ -115,7 +128,8 @@ func (c *Collector) Collect(ctx context.Context) (Snapshot, error) {
 			FreeBytes:   diskUsage.Free,
 			UsedPercent: diskUsage.UsedPercent,
 		},
-		Networks: networks,
+		Networks:    networks,
+		Temperature: maxTemp,
 	}
 
 	return snapshot, nil
