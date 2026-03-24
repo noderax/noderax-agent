@@ -78,6 +78,7 @@ type metricsEvent struct {
 	CPUUsage     *float64           `json:"cpuUsage,omitempty"`
 	MemoryUsage  *float64           `json:"memoryUsage,omitempty"`
 	DiskUsage    *float64           `json:"diskUsage,omitempty"`
+	Temperature  *float64           `json:"temperature,omitempty"`
 	NetworkStats []api.NetworkStats `json:"networkStats"`
 	CPU          *api.CPUStats      `json:"cpu,omitempty"`
 	Memory       *api.MemoryStats   `json:"memory,omitempty"`

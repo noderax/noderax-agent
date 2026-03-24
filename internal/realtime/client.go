@@ -294,6 +294,7 @@ func (s *Service) SendMetrics(ctx context.Context, event api.MetricsRequest) err
 		CPUUsage:     &cpuUsage,
 		MemoryUsage:  &memoryUsage,
 		DiskUsage:    &diskUsage,
+		Temperature:  &event.Temperature,
 		NetworkStats: networks,
 		Networks:     networks,
 	})

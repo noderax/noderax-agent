@@ -86,12 +86,13 @@ func (c *Collector) Collect(ctx context.Context) (Snapshot, error) {
 	// Temperature collection is best-effort and should not block the snapshot if it fails
 	var maxTemp float64
 	temps, err := sensors.TemperaturesWithContext(ctx)
-	if err == nil {
+	if err == nil && len(temps) > 0 {
 		for _, t := range temps {
 			if t.Temperature > maxTemp {
 				maxTemp = t.Temperature
 			}
 		}
+		// fmt.Printf("[DEBUG] Collected max temperature: %.2f\n", maxTemp)
 	}
 
 	networks := make([]NetworkStats, 0, len(networkCounters))
