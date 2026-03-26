@@ -3,18 +3,19 @@
 </p>
 <h1 align="center">Noderax Agent</h1>
 
-Noderax Agent is a Go-based node agent that connects servers to the Noderax platform. It enrolls a machine, opens a realtime websocket session, streams metrics, receives task dispatch events from `noderax-api`, and executes supported operations such as shell commands and package management.
+Noderax Agent is the Go-based node runtime for the platform. It enrolls a machine, opens the agent realtime socket, streams telemetry, claims tasks over HTTP long polling by default, and executes supported operations such as shell commands and package management.
 
 ## Highlights
 
-- Enrollment-based node onboarding with short-lived approval tokens
+- Enrollment-based node onboarding with approval tokens
 - Background service support for Ubuntu and macOS
 - Built-in CLI for install, start, stop, restart, status, and config updates
-- Realtime websocket events for metrics and task lifecycle
-- **Reliable Task Execution:** Support for task cancellation with log drain timeouts
-- **Non-interactive Environment:** Commands run with `PAGER=cat` and high `COLUMNS` to ensure stable output
+- Realtime Socket.IO session for agent auth, metrics, and lifecycle signaling
+- HTTP long-poll task claiming as the primary execution path
+- Graceful cancellation with log-drain timeout handling
+- Non-interactive execution environment with `PAGER=cat` and high `COLUMNS`
 - Scheduled runs arrive as standard queued tasks, so no separate schedule runtime is required on the agent
-- Persistent identity storage for approved nodes
+- Persistent node identity storage
 
 ## Supported Platforms
 
@@ -35,20 +36,20 @@ cd noderax-agent
 sudo ./scripts/install.sh
 ```
 
-The installer auto-detects the current OS and then:
+The installer:
 
-- ask for the API URL
-- ask for the enrollment email
-- generate an enrollment token
-- wait for approval from the web UI
-- install the agent as a background service
-- start it automatically in the background
+- asks for the API URL
+- asks for the enrollment email
+- requests an enrollment token
+- waits for approval from the web UI
+- installs the agent as a background service
+- starts it automatically
 
-When you run the installer from a source checkout, it also mirrors the entered values into the repository-level `config.json` for local visibility. The managed service still reads its OS-specific config path shown below.
+When you run the installer from a source checkout, it mirrors the entered values into repository-level `config.json` for local visibility. The managed service still reads its OS-specific config path.
+
+## Installed Paths
 
 ### Ubuntu
-
-Installed paths on Ubuntu:
 
 - Binary: `/opt/noderax-agent/noderax-agent`
 - Symlink: `/usr/local/bin/noderax-agent`
@@ -57,8 +58,6 @@ Installed paths on Ubuntu:
 - Service: `/etc/systemd/system/noderax-agent.service`
 
 ### macOS
-
-Installed paths on macOS:
 
 - Binary: `/usr/local/lib/noderax-agent/noderax-agent`
 - Symlink: `/usr/local/bin/noderax-agent`
@@ -84,7 +83,7 @@ Set at least:
 
 - `api_url`
 
-Leave `enrollment_token` empty. The enrollment command will populate it automatically.
+Leave `enrollment_token` empty. The enrollment command will populate it.
 
 ### 3. Run enrollment
 
@@ -92,14 +91,13 @@ Leave `enrollment_token` empty. The enrollment command will populate it automati
 ./noderax-agent enroll
 ```
 
-The command will:
+The agent will:
 
 - ask for the enrollment email
 - call `POST /api/v1/enrollments/initiate`
-- display the short-lived token
-- save the token in the config file
-- wait for `GET /api/v1/enrollments/{token}` to become `approved`
-- write `nodeId` and `agentToken` into the identity state file
+- save the returned token
+- poll `GET /api/v1/enrollments/{token}`
+- persist the approved `nodeId` and `agentToken`
 
 ### 4. Start the agent manually
 
@@ -107,15 +105,13 @@ The command will:
 ./noderax-agent
 ```
 
-If you want to point to a specific config file:
+Use a custom config path if needed:
 
 ```bash
 NODERAX_CONFIG_FILE=/path/to/config.json ./noderax-agent
 ```
 
 ## Service Management
-
-Once installed, the same CLI is used on both Ubuntu and macOS.
 
 ```bash
 sudo noderax-agent start
@@ -126,13 +122,13 @@ sudo noderax-agent status
 
 ## Configuration Management
 
-Show the active managed config:
+Show active config:
 
 ```bash
 noderax-agent config show
 ```
 
-Update a config value:
+Update config values:
 
 ```bash
 sudo noderax-agent config set api_url https://api.example.com
@@ -141,9 +137,7 @@ sudo noderax-agent config set metrics_interval 15s
 sudo noderax-agent config set log_level debug
 ```
 
-After `config set`, the managed service is restarted automatically when installed.
-
-Supported config keys:
+Supported keys:
 
 - `api_url`
 - `enrollment_token`
@@ -164,9 +158,26 @@ Supported config keys:
 - `state_file`
 - `log_level`
 
+## Task Delivery Model
+
+The current default execution path is HTTP polling.
+
+- The agent long-polls `POST /api/v1/agent/tasks/claim`
+- A claimed task is acknowledged with `accepted` and `started`
+- Logs are appended through `POST /api/v1/agent/tasks/:taskId/logs`
+- Completion is posted to `POST /api/v1/agent/tasks/:taskId/completed`
+- Cancellation intent is checked through agent control polling
+
+The agent realtime socket remains important for:
+
+- agent authentication
+- metrics streaming
+- lifecycle support
+- optional compatibility with API-side realtime task dispatch when explicitly enabled
+
 ## Realtime Socket.IO v4
 
-Required environment variables for realtime mode:
+Typical realtime settings:
 
 ```bash
 NODERAX_API_URL=https://<domain>
@@ -178,56 +189,37 @@ NODERAX_REALTIME_METRICS_INTERVAL=3s
 
 Notes:
 
-- Auth is performed after socket connection with the `agent.auth` event.
-- Namespace and Engine.IO path are configured separately.
-- Realtime startup performs a self-check with `GET {baseURL}/socket.io/?EIO=4&transport=polling` and expects a `sid` in response.
+- Auth is performed after socket connection with `agent.auth`
+- Namespace and Engine.IO path are configured separately
+- Startup performs a polling health-check against `/socket.io/` before the full socket session is used
 
 Common failure modes:
 
-- `invalid URL input`:
-  `NODERAX_API_URL` is malformed or missing host.
-- `tls/proxy handshake failure`:
-  TLS certificate/proxy setup issue between agent and API.
-- `namespace connect failure`:
-  wrong namespace or Socket.IO path mismatch.
-- `auth error`:
-  `agent.auth` payload rejected by backend.
+- `invalid URL input`
+- `tls/proxy handshake failure`
+- `namespace connect failure`
+- `auth error`
 
-## Enrollment Flow
-
-The agent uses the following flow:
-
-1. Prompt the operator for the enrollment email.
-2. Send `POST /api/v1/enrollments/initiate` with:
-   - `email`
-   - `hostname`
-   - `additionalInfo.os`
-   - `additionalInfo.arch`
-   - `additionalInfo.agentVersion`
-3. Save the returned short-lived token into the config file.
-4. Wait for approval from the web UI via `GET /api/v1/enrollments/{token}`.
-5. Persist the approved `nodeId` and `agentToken`.
-6. Start realtime websocket session and metrics/task execution loops.
-
-## Task Execution & Environment
+## Task Execution Environment
 
 The agent executes `shell.exec` tasks in a controlled non-interactive environment:
-- **PAGER=cat:** Prevents commands from hanging in interactive pagers (e.g., `git log`, `apt`).
-- **COLUMNS=100000:** Ensures wide output lines are not truncated or wrapped prematurely.
-- **Cancellation:** Tasks can be cancelled via the API. The agent handles cancellation gracefully, ensuring all pending logs are drained with a 3-second timeout before the execution context is destroyed.
-- **Scheduled task compatibility:** Recurring commands created in the web UI are enqueued by the API as ordinary `shell.exec` tasks, so the execution path is identical to a manually queued command.
 
-For package management (`packageList`), the agent now uses optimized `dpkg -l` parsing on Debian/Ubuntu systems to provide structured package metadata (name, version, architecture, description).
+- `PAGER=cat`
+- `COLUMNS=100000`
+- graceful cancellation with log drain timeout
+- scheduled tasks use the same execution path as manually queued tasks
+
+For package listing on Debian/Ubuntu, the agent uses optimized `dpkg -l` parsing to return structured package metadata.
 
 ## Project Structure
 
 - [`cmd/agent`](cmd/agent): application entrypoint and CLI dispatch
-- [`internal/agent`](internal/agent): enrollment, identity persistence, and worker bootstrap
-- [`internal/agentctl`](internal/agentctl): install, service management, and config CLI
-- [`internal/api`](internal/api): API request/response models and HTTP client
-- [`internal/tasks`](internal/tasks): realtime task execution
+- [`internal/agent`](internal/agent): enrollment, identity persistence, bootstrap
+- [`internal/agentctl`](internal/agentctl): install, service management, config CLI
+- [`internal/api`](internal/api): HTTP client and API models
+- [`internal/tasks`](internal/tasks): HTTP claim loop and task execution
 - [`internal/metrics`](internal/metrics): metrics worker
-- [`internal/realtime`](internal/realtime): websocket realtime client and event handlers
+- [`internal/realtime`](internal/realtime): Socket.IO client and handlers
 - [`internal/system`](internal/system): host and system information helpers
 - [`scripts`](scripts): installation entrypoints
 
@@ -245,7 +237,7 @@ Build locally:
 go build -o noderax-agent ./cmd/agent
 ```
 
-Run in foreground during development:
+Run in foreground:
 
 ```bash
 cp config.example.json config.json
@@ -255,7 +247,7 @@ cp config.example.json config.json
 
 ## Notes
 
-- Ubuntu installation assumes a `systemd`-based system.
+- Ubuntu installation assumes `systemd`.
 - macOS installation assumes `launchd` and requires `sudo`.
-- The managed service configuration path can be overridden with `NODERAX_CONFIG_FILE`.
-- For production release packaging, generating separate Ubuntu and macOS artifacts is recommended.
+- The managed service config path can be overridden with `NODERAX_CONFIG_FILE`.
+- API-side realtime task push is not the default control path; HTTP claiming should be considered the normal operating mode.
