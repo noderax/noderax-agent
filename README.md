@@ -12,6 +12,7 @@ Noderax Agent is the Go-based node runtime for the platform. It enrolls a machin
 - Built-in CLI for install, start, stop, restart, status, and config updates
 - Realtime Socket.IO session for agent auth, metrics, and lifecycle signaling
 - HTTP long-poll task claiming as the primary execution path
+- Heartbeat-based agent version, platform version, and kernel telemetry for fleet visibility
 - Graceful cancellation with log-drain timeout handling
 - Non-interactive execution environment with `PAGER=cat` and high `COLUMNS`
 - Scheduled runs arrive as standard queued tasks, so no separate schedule runtime is required on the agent
@@ -175,6 +176,8 @@ The agent realtime socket remains important for:
 - lifecycle support
 - optional compatibility with API-side realtime task dispatch when explicitly enabled
 
+Fleet visibility uses heartbeat telemetry only. The current product surface does not include agent self-update orchestration inside the agent runtime; upgrades remain an external deployment concern.
+
 ## Realtime Socket.IO v4
 
 Typical realtime settings:
@@ -251,3 +254,4 @@ cp config.example.json config.json
 - macOS installation assumes `launchd` and requires `sudo`.
 - The managed service config path can be overridden with `NODERAX_CONFIG_FILE`.
 - API-side realtime task push is not the default control path; HTTP claiming should be considered the normal operating mode.
+- When a node is put into maintenance mode from the control plane, the API stops assigning new work to that node while in-flight tasks are allowed to finish.
