@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"runtime"
+
 	"strings"
 	"sync"
 	"syscall"
@@ -85,10 +85,6 @@ func TestNormalizeSizeDefaults(t *testing.T) {
 }
 
 func TestTerminalLifecycle(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("PTY integration is unix-only in tests")
-	}
-
 	recorder := &eventRecorder{}
 	manager := NewManager(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -140,10 +136,6 @@ func TestTerminalLifecycle(t *testing.T) {
 }
 
 func TestStreamPTYOutputFlushesWithoutAdditionalInput(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("PTY integration is unix-only in tests")
-	}
-
 	recorder := &eventRecorder{}
 	manager := NewManager(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -205,10 +197,6 @@ func TestStreamPTYOutputFlushesWithoutAdditionalInput(t *testing.T) {
 }
 
 func TestStartTerminalCommandFallsBackWithoutControllingTTY(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("PTY integration is unix-only in tests")
-	}
-
 	originalStartWithSize := startPTYWithSize
 	originalStartWithAttrs := startPTYWithAttrs
 	t.Cleanup(func() {
@@ -253,10 +241,6 @@ func TestStartTerminalCommandFallsBackWithoutControllingTTY(t *testing.T) {
 }
 
 func TestStartTerminalCommandFallsBackToMinimalMode(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("PTY integration is unix-only in tests")
-	}
-
 	originalStartWithSize := startPTYWithSize
 	originalStartWithAttrs := startPTYWithAttrs
 	t.Cleanup(func() {

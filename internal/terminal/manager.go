@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -73,9 +72,6 @@ func (m *Manager) StartSession(
 	cols int,
 	rows int,
 ) error {
-	if runtime.GOOS == "windows" {
-		return ErrUnsupportedPlatform
-	}
 	if strings.TrimSpace(sessionID) == "" {
 		return fmt.Errorf("session ID is required")
 	}

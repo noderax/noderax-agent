@@ -8,7 +8,7 @@ Noderax Agent is the Go-based node runtime for the platform. It enrolls a machin
 ## Highlights
 
 - Enrollment-based node onboarding with approval tokens
-- Background service support for Ubuntu and macOS
+- Background service support for Linux-based systems
 - Built-in CLI for install, start, stop, restart, status, and config updates
 - Realtime Socket.IO session for agent auth, metrics, and lifecycle signaling
 - HTTP long-poll task claiming as the primary execution path
@@ -22,8 +22,7 @@ Noderax Agent is the Go-based node runtime for the platform. It enrolls a machin
 
 ## Supported Platforms
 
-- Ubuntu and Ubuntu-compatible Linux systems with `systemd`
-- macOS systems with `launchd`
+- Linux-based systems with `systemd` (Ubuntu, Debian, CentOS, RHEL, etc.)
 - Manual source-based execution on other developer environments
 
 ## Quick Install
@@ -52,7 +51,7 @@ When you run the installer from a source checkout, it mirrors the entered values
 
 ## Installed Paths
 
-### Ubuntu
+### Linux (systemd)
 
 - Binary: `/opt/noderax-agent/noderax-agent`
 - Symlink: `/usr/local/bin/noderax-agent`
@@ -60,13 +59,7 @@ When you run the installer from a source checkout, it mirrors the entered values
 - State: `/var/lib/noderax-agent/agent_identity.json`
 - Service: `/etc/systemd/system/noderax-agent.service`
 
-### macOS
 
-- Binary: `/usr/local/lib/noderax-agent/noderax-agent`
-- Symlink: `/usr/local/bin/noderax-agent`
-- Config: `/usr/local/etc/noderax-agent/config.json`
-- State: `/usr/local/var/lib/noderax-agent/agent_identity.json`
-- Service: `/Library/LaunchDaemons/com.noderax.agent.plist`
 
 ## Manual Installation
 
@@ -283,8 +276,8 @@ cp config.example.json config.json
 
 ## Notes
 
-- Ubuntu installation assumes `systemd`.
-- macOS installation assumes `launchd` and requires `sudo`.
+- Linux installation assumes `systemd`.
+
 - The managed service config path can be overridden with `NODERAX_CONFIG_FILE`.
 - API-side realtime task push is not the default control path; HTTP claiming should be considered the normal operating mode.
 - Interactive terminals are the main exception: they depend on the agent realtime socket being healthy.

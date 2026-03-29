@@ -9,7 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
+
 	"runtime"
 	"strings"
 	"sync"
@@ -520,20 +520,6 @@ func normalizePackageNames(payload packageMutationPayload) ([]string, error) {
 }
 
 func buildShellCommand(goos string, payload ShellExecPayload) (string, []string) {
-	if goos == "windows" {
-		shell := payload.Shell
-		if shell == "" {
-			shell = "cmd.exe"
-		}
-
-		base := strings.ToLower(filepath.Base(shell))
-		if strings.Contains(base, "powershell") {
-			return shell, []string{"-Command", payload.Command}
-		}
-
-		return shell, []string{"/C", payload.Command}
-	}
-
 	shell := payload.Shell
 	if shell == "" {
 		shell = "/bin/sh"

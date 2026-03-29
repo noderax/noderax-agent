@@ -2,8 +2,7 @@ package system
 
 import (
 	"context"
-	"os"
-	"runtime"
+
 	"time"
 
 	"github.com/shirou/gopsutil/v4/cpu"
@@ -137,13 +136,6 @@ func (c *Collector) Collect(ctx context.Context) (Snapshot, error) {
 }
 
 func defaultDiskPath() string {
-	if runtime.GOOS == "windows" {
-		if drive := os.Getenv("SystemDrive"); drive != "" {
-			return drive + "\\"
-		}
-		return "C:\\"
-	}
-
 	return "/"
 }
 
