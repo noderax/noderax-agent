@@ -12,9 +12,11 @@ Noderax Agent is the Go-based node runtime for the platform. It enrolls a machin
 - Built-in CLI for install, start, stop, restart, status, and config updates
 - Realtime Socket.IO session for agent auth, metrics, and lifecycle signaling
 - HTTP long-poll task claiming as the primary execution path
+- Interactive terminal session support over the agent realtime socket
 - Heartbeat-based agent version, platform version, and kernel telemetry for fleet visibility
 - Graceful cancellation with log-drain timeout handling
 - Non-interactive execution environment with `PAGER=cat` and high `COLUMNS`
+- PTY shell fallback modes for hosts where the default controlling-TTY start path is restricted
 - Scheduled runs arrive as standard queued tasks, so no separate schedule runtime is required on the agent
 - Persistent node identity storage
 
@@ -174,6 +176,7 @@ The agent realtime socket remains important for:
 - agent authentication
 - metrics streaming
 - lifecycle support
+- interactive terminal control and streaming
 - optional compatibility with API-side realtime task dispatch when explicitly enabled
 
 Fleet visibility uses heartbeat telemetry only. The current product surface does not include agent self-update orchestration inside the agent runtime; upgrades remain an external deployment concern.
@@ -202,6 +205,36 @@ Common failure modes:
 - `tls/proxy handshake failure`
 - `namespace connect failure`
 - `auth error`
+
+## Interactive Terminal Sessions
+
+Interactive terminal sessions are not delivered through the HTTP task claim loop. They use the agent realtime socket directly.
+
+Incoming control events:
+
+- `terminal.start`
+- `terminal.input`
+- `terminal.resize`
+- `terminal.stop`
+
+Outgoing lifecycle events:
+
+- `terminal.opened`
+- `terminal.output`
+- `terminal.exited`
+- `terminal.error`
+
+Implementation notes:
+
+- The agent opens a PTY-backed interactive shell rather than reusing the non-interactive task executor
+- Shell resolution tries `$SHELL`, `/bin/bash`, `/bin/zsh`, then `/bin/sh`
+- Unix PTY startup falls back across multiple modes:
+  - `pty+ctty`
+  - `pty-no-ctty`
+  - `pty-minimal`
+- The terminal session environment sets `TERM=xterm-256color` and `PAGER=cat`
+- Output is chunked and flushed on a timer so the web console receives live updates without waiting for more keystrokes
+- On constrained hosts, fallback PTY modes may log reduced job-control capability while remaining usable
 
 ## Task Execution Environment
 
@@ -254,4 +287,5 @@ cp config.example.json config.json
 - macOS installation assumes `launchd` and requires `sudo`.
 - The managed service config path can be overridden with `NODERAX_CONFIG_FILE`.
 - API-side realtime task push is not the default control path; HTTP claiming should be considered the normal operating mode.
+- Interactive terminals are the main exception: they depend on the agent realtime socket being healthy.
 - When a node is put into maintenance mode from the control plane, the API stops assigning new work to that node while in-flight tasks are allowed to finish.
