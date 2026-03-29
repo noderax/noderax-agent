@@ -9,6 +9,7 @@ require (
 )
 
 require (
+	github.com/creack/pty v1.1.24 // indirect
 	github.com/deckarep/golang-set/v2 v2.6.0 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/fatih/color v1.17.0 // indirect

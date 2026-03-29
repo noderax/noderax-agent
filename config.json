@@ -16,5 +16,5 @@
   "realtime_namespace": "/agent-realtime",
   "realtime_path": "/socket.io/",
   "state_file": "/usr/local/var/lib/noderax-agent/agent_identity.json",
-  "log_level": "debug"
+  "log_level": "info"
 }

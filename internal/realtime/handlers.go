@@ -16,6 +16,14 @@ const (
 	EventAgentError   = "agent.error"
 	EventAgentPing    = "agent.ping"
 	EventAgentMetrics = "agent.metrics"
+	EventTerminalStart  = "terminal.start"
+	EventTerminalInput  = "terminal.input"
+	EventTerminalResize = "terminal.resize"
+	EventTerminalStop   = "terminal.stop"
+	EventTerminalOpened = "terminal.opened"
+	EventTerminalOutput = "terminal.output"
+	EventTerminalExited = "terminal.exited"
+	EventTerminalError  = "terminal.error"
 	EventTaskDispatch = "task.dispatch"
 	EventTaskAccepted = "task.accepted"
 	EventTaskStarted  = "task.started"
@@ -27,11 +35,27 @@ type taskDispatcher interface {
 	DispatchRealtimeTask(context.Context, api.Task) bool
 }
 
-type dispatcher struct {
-	handler taskDispatcher
+type terminalStartDispatcher interface {
+	StartTerminalSession(context.Context, string, int, int) error
 }
 
-func newDispatcher(handler taskDispatcher) *dispatcher {
+type terminalInputDispatcher interface {
+	WriteTerminalInput(context.Context, string, string) error
+}
+
+type terminalResizeDispatcher interface {
+	ResizeTerminalSession(context.Context, string, int, int) error
+}
+
+type terminalStopDispatcher interface {
+	StopTerminalSession(context.Context, string, string) error
+}
+
+type dispatcher struct {
+	handler any
+}
+
+func newDispatcher(handler any) *dispatcher {
 	return &dispatcher{handler: handler}
 }
 
@@ -52,8 +76,52 @@ func (d *dispatcher) handleMessage(ctx context.Context, data []byte) error {
 			return fmt.Errorf("task.dispatch is missing task payload")
 		}
 
-		d.handler.DispatchRealtimeTask(ctx, *envelope.Task)
+		taskHandler, ok := d.handler.(taskDispatcher)
+		if !ok {
+			return nil
+		}
+		taskHandler.DispatchRealtimeTask(ctx, *envelope.Task)
 		return nil
+	case EventTerminalStart:
+		var event terminalStartEvent
+		if err := json.Unmarshal(data, &event); err != nil {
+			return fmt.Errorf("decode terminal.start payload: %w", err)
+		}
+		handler, ok := d.handler.(terminalStartDispatcher)
+		if !ok {
+			return nil
+		}
+		return handler.StartTerminalSession(ctx, event.SessionID, event.Cols, event.Rows)
+	case EventTerminalInput:
+		var event terminalInputEvent
+		if err := json.Unmarshal(data, &event); err != nil {
+			return fmt.Errorf("decode terminal.input payload: %w", err)
+		}
+		handler, ok := d.handler.(terminalInputDispatcher)
+		if !ok {
+			return nil
+		}
+		return handler.WriteTerminalInput(ctx, event.SessionID, event.Payload)
+	case EventTerminalResize:
+		var event terminalResizeEvent
+		if err := json.Unmarshal(data, &event); err != nil {
+			return fmt.Errorf("decode terminal.resize payload: %w", err)
+		}
+		handler, ok := d.handler.(terminalResizeDispatcher)
+		if !ok {
+			return nil
+		}
+		return handler.ResizeTerminalSession(ctx, event.SessionID, event.Cols, event.Rows)
+	case EventTerminalStop:
+		var event terminalStopEvent
+		if err := json.Unmarshal(data, &event); err != nil {
+			return fmt.Errorf("decode terminal.stop payload: %w", err)
+		}
+		handler, ok := d.handler.(terminalStopDispatcher)
+		if !ok {
+			return nil
+		}
+		return handler.StopTerminalSession(ctx, event.SessionID, event.Reason)
 	default:
 		return nil
 	}
@@ -126,6 +194,63 @@ type authAckEvent struct {
 type authErrorEvent struct {
 	Message string `json:"message,omitempty"`
 	Error   string `json:"error,omitempty"`
+}
+
+type terminalStartEvent struct {
+	Type      string `json:"type"`
+	SessionID string `json:"sessionId"`
+	Cols      int    `json:"cols"`
+	Rows      int    `json:"rows"`
+}
+
+type terminalInputEvent struct {
+	Type      string `json:"type"`
+	SessionID string `json:"sessionId"`
+	Payload   string `json:"payload"`
+}
+
+type terminalResizeEvent struct {
+	Type      string `json:"type"`
+	SessionID string `json:"sessionId"`
+	Cols      int    `json:"cols"`
+	Rows      int    `json:"rows"`
+}
+
+type terminalStopEvent struct {
+	Type      string `json:"type"`
+	SessionID string `json:"sessionId"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+type terminalOpenedEvent struct {
+	Type      string `json:"type"`
+	SessionID string `json:"sessionId"`
+	Cols      int    `json:"cols,omitempty"`
+	Rows      int    `json:"rows,omitempty"`
+	Timestamp string `json:"timestamp"`
+}
+
+type terminalOutputEvent struct {
+	Type      string `json:"type"`
+	SessionID string `json:"sessionId"`
+	Direction string `json:"direction"`
+	Payload   string `json:"payload"`
+	Timestamp string `json:"timestamp"`
+}
+
+type terminalExitedEvent struct {
+	Type      string `json:"type"`
+	SessionID string `json:"sessionId"`
+	ExitCode  int    `json:"exitCode,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	Timestamp string `json:"timestamp"`
+}
+
+type terminalErrorEvent struct {
+	Type      string `json:"type"`
+	SessionID string `json:"sessionId"`
+	Message   string `json:"message"`
+	Timestamp string `json:"timestamp"`
 }
 
 func formatTimestampUTCMillis(value time.Time) string {

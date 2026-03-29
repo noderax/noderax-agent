@@ -267,6 +267,68 @@ func (s *Service) TaskCompleted(ctx context.Context, event api.CompleteTaskReque
 	return err
 }
 
+func (s *Service) TerminalOpened(
+	ctx context.Context,
+	sessionID string,
+	cols int,
+	rows int,
+	timestamp time.Time,
+) error {
+	return s.enqueueCritical(ctx, terminalOpenedEvent{
+		Type:      EventTerminalOpened,
+		SessionID: sessionID,
+		Cols:      cols,
+		Rows:      rows,
+		Timestamp: formatTimestampUTCMillis(timestamp),
+	})
+}
+
+func (s *Service) TerminalOutput(
+	ctx context.Context,
+	sessionID string,
+	direction string,
+	payload string,
+	timestamp time.Time,
+) error {
+	return s.enqueueCritical(ctx, terminalOutputEvent{
+		Type:      EventTerminalOutput,
+		SessionID: sessionID,
+		Direction: direction,
+		Payload:   payload,
+		Timestamp: formatTimestampUTCMillis(timestamp),
+	})
+}
+
+func (s *Service) TerminalExited(
+	ctx context.Context,
+	sessionID string,
+	exitCode int,
+	reason string,
+	timestamp time.Time,
+) error {
+	return s.enqueueCritical(ctx, terminalExitedEvent{
+		Type:      EventTerminalExited,
+		SessionID: sessionID,
+		ExitCode:  exitCode,
+		Reason:    reason,
+		Timestamp: formatTimestampUTCMillis(timestamp),
+	})
+}
+
+func (s *Service) TerminalError(
+	ctx context.Context,
+	sessionID string,
+	message string,
+	timestamp time.Time,
+) error {
+	return s.enqueueCritical(ctx, terminalErrorEvent{
+		Type:      EventTerminalError,
+		SessionID: sessionID,
+		Message:   message,
+		Timestamp: formatTimestampUTCMillis(timestamp),
+	})
+}
+
 func (s *Service) SendMetrics(ctx context.Context, event api.MetricsRequest) error {
 	if !s.sessionActive.Load() {
 		return ErrSessionNotActive
@@ -416,6 +478,39 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 		}
 	}
 
+	dispatchTerminalEvent := func(eventType string, sessionID string, payload any) {
+		bytes, err := json.Marshal(payload)
+		if err != nil {
+			s.logger.Warn("failed to encode socket.io terminal payload", "event", eventType, "session_id", sessionID, "error", err)
+			return
+		}
+
+		envelope := map[string]any{"type": eventType}
+		if err := json.Unmarshal(bytes, &envelope); err != nil {
+			s.logger.Warn("failed to normalize socket.io terminal payload", "event", eventType, "session_id", sessionID, "error", err)
+			return
+		}
+		envelope["type"] = eventType
+
+		finalBytes, err := json.Marshal(envelope)
+		if err != nil {
+			s.logger.Warn("failed to marshal terminal envelope", "event", eventType, "session_id", sessionID, "error", err)
+			return
+		}
+
+		s.logger.Info("realtime terminal event received", "event", eventType, "session_id", sessionID)
+
+		if err := s.dispatcher.handleMessage(ctx, finalBytes); err != nil {
+			s.logger.Warn("realtime terminal handling failed", "event", eventType, "session_id", sessionID, "error", err)
+			if strings.TrimSpace(sessionID) == "" {
+				return
+			}
+			if emitErr := s.TerminalError(context.Background(), sessionID, err.Error(), time.Now().UTC()); emitErr != nil {
+				s.logger.Warn("failed to emit terminal error", "event", eventType, "session_id", sessionID, "error", emitErr)
+			}
+		}
+	}
+
 	socket.OnConnect(func() {
 		authPayload := authEvent{Type: EventAgentAuth, NodeID: nodeID, AgentToken: agentToken}
 		socket.Emit(EventAgentAuth, authPayload)
@@ -492,7 +587,7 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 	socket.OnEvent(EventTaskDispatch, func(payload any, extra ...any) {
 		if len(extra) > 0 {
 			s.logger.Info("realtime multi-arg dispatch received", "args_count", 1+len(extra))
-			
+
 			// Check if any extra arg is the actual task
 			for _, arg := range extra {
 				if argMap, ok := arg.(map[string]any); ok {
@@ -511,11 +606,23 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 				}
 			}
 		}
-		
+
 		dispatchEvent(payload)
 	})
 	socket.OnEvent("message", func(payload any) {
 		dispatchEvent(payload)
+	})
+	socket.OnEvent(EventTerminalStart, func(payload terminalStartEvent) {
+		dispatchTerminalEvent(EventTerminalStart, payload.SessionID, payload)
+	})
+	socket.OnEvent(EventTerminalInput, func(payload terminalInputEvent) {
+		dispatchTerminalEvent(EventTerminalInput, payload.SessionID, payload)
+	})
+	socket.OnEvent(EventTerminalResize, func(payload terminalResizeEvent) {
+		dispatchTerminalEvent(EventTerminalResize, payload.SessionID, payload)
+	})
+	socket.OnEvent(EventTerminalStop, func(payload terminalStopEvent) {
+		dispatchTerminalEvent(EventTerminalStop, payload.SessionID, payload)
 	})
 
 	socket.Connect()

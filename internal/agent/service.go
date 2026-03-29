@@ -13,6 +13,7 @@ import (
 	"github.com/noderax/noderax-agent/internal/config"
 	"github.com/noderax/noderax-agent/internal/metrics"
 	"github.com/noderax/noderax-agent/internal/realtime"
+	"github.com/noderax/noderax-agent/internal/terminal"
 	"github.com/noderax/noderax-agent/internal/tasks"
 )
 
@@ -25,14 +26,79 @@ type Service struct {
 	store    *IdentityStore
 	metrics  *metrics.Service
 	tasks    *tasks.Service
+	terminal *terminal.Manager
 	realtime *realtime.Service
 	initErr  error
 }
 
-type noopRealtimeTaskDispatcher struct{}
+type terminalController interface {
+	StartSession(context.Context, string, int, int) error
+	WriteInput(context.Context, string, string) error
+	ResizeSession(context.Context, string, int, int) error
+	StopSession(context.Context, string, string) error
+}
 
-func (noopRealtimeTaskDispatcher) DispatchRealtimeTask(context.Context, api.Task) bool {
-	return false
+type realtimeCommandHandler struct {
+	tasks    *tasks.Service
+	terminal terminalController
+}
+
+func (h *realtimeCommandHandler) DispatchRealtimeTask(ctx context.Context, task api.Task) bool {
+	if h.tasks == nil {
+		return false
+	}
+
+	return h.tasks.DispatchRealtimeTask(ctx, task)
+}
+
+func (h *realtimeCommandHandler) StartTerminalSession(
+	ctx context.Context,
+	sessionID string,
+	cols int,
+	rows int,
+) error {
+	if h.terminal == nil {
+		return fmt.Errorf("terminal manager is not configured")
+	}
+
+	return h.terminal.StartSession(ctx, sessionID, cols, rows)
+}
+
+func (h *realtimeCommandHandler) WriteTerminalInput(
+	ctx context.Context,
+	sessionID string,
+	payload string,
+) error {
+	if h.terminal == nil {
+		return fmt.Errorf("terminal manager is not configured")
+	}
+
+	return h.terminal.WriteInput(ctx, sessionID, payload)
+}
+
+func (h *realtimeCommandHandler) ResizeTerminalSession(
+	ctx context.Context,
+	sessionID string,
+	cols int,
+	rows int,
+) error {
+	if h.terminal == nil {
+		return fmt.Errorf("terminal manager is not configured")
+	}
+
+	return h.terminal.ResizeSession(ctx, sessionID, cols, rows)
+}
+
+func (h *realtimeCommandHandler) StopTerminalSession(
+	ctx context.Context,
+	sessionID string,
+	reason string,
+) error {
+	if h.terminal == nil {
+		return fmt.Errorf("terminal manager is not configured")
+	}
+
+	return h.terminal.StopSession(ctx, sessionID, reason)
 }
 
 func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, version string) *Service {
@@ -63,6 +129,7 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		identity.Credentials,
 	)
 
+	commandHandler := &realtimeCommandHandler{tasks: taskService}
 	realtimeService, err := realtime.NewService(
 		cfg.APIURL,
 		cfg.RealtimeNamespace,
@@ -73,7 +140,7 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		cfg.RealtimeBackoffJitter,
 		logger,
 		identity.Credentials,
-		noopRealtimeTaskDispatcher{},
+		commandHandler,
 		func(context.Context) {
 			metricsService.TriggerImmediateSnapshot()
 		},
@@ -81,6 +148,13 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 	if err != nil {
 		logger.Error("failed to initialize realtime service", "error", err)
 	}
+
+	var terminalEvents terminal.RealtimeEvents
+	if realtimeService != nil {
+		terminalEvents = realtimeService
+	}
+	terminalManager := terminal.NewManager(logger, terminalEvents)
+	commandHandler.terminal = terminalManager
 	metricsService.SetRealtimeClient(realtimeService)
 
 	return &Service{
@@ -92,6 +166,7 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		store:    NewIdentityStore(cfg.StateFile),
 		metrics:  metricsService,
 		tasks:    taskService,
+		terminal: terminalManager,
 		realtime: realtimeService,
 		initErr:  err,
 	}

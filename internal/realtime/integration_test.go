@@ -3,6 +3,7 @@ package realtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,12 +19,51 @@ type integrationDispatcher struct {
 	dispatchCh chan api.Task
 }
 
+type terminalIntegrationDispatcher struct {
+	startCh  chan terminalStartEvent
+	startErr error
+	svc      *Service
+}
+
 func (d *integrationDispatcher) DispatchRealtimeTask(_ context.Context, task api.Task) bool {
 	select {
 	case d.dispatchCh <- task:
 	default:
 	}
 	return true
+}
+
+func (d *terminalIntegrationDispatcher) DispatchRealtimeTask(
+	_ context.Context,
+	_ api.Task,
+) bool {
+	return false
+}
+
+func (d *terminalIntegrationDispatcher) StartTerminalSession(
+	ctx context.Context,
+	sessionID string,
+	cols int,
+	rows int,
+) error {
+	select {
+	case d.startCh <- terminalStartEvent{
+		SessionID: sessionID,
+		Cols:      cols,
+		Rows:      rows,
+	}:
+	default:
+	}
+
+	if d.startErr != nil {
+		return d.startErr
+	}
+
+	if d.svc != nil {
+		return d.svc.TerminalOpened(ctx, sessionID, cols, rows, time.Now().UTC())
+	}
+
+	return nil
 }
 
 func TestRealtimeConnectAuthDispatchLifecycle(t *testing.T) {
@@ -135,6 +175,220 @@ func TestRealtimeConnectAuthDispatchLifecycle(t *testing.T) {
 		}
 	case <-time.After(8 * time.Second):
 		t.Fatalf("timed out waiting for task.accepted")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for service shutdown")
+	}
+}
+
+func TestRealtimeTerminalStartLifecycle(t *testing.T) {
+	ioServer := sio.NewServer(nil)
+	namespace := ioServer.Of("/agent-realtime")
+
+	authCh := make(chan authEvent, 1)
+	openedCh := make(chan map[string]any, 1)
+
+	namespace.OnConnection(func(socket sio.ServerSocket) {
+		socket.OnEvent(EventAgentAuth, func(payload map[string]any) {
+			var auth authEvent
+			b, _ := json.Marshal(payload)
+			_ = json.Unmarshal(b, &auth)
+			select {
+			case authCh <- auth:
+			default:
+			}
+
+			socket.Emit(EventAgentAuthAck, map[string]any{
+				"authenticated": true,
+				"nodeId":        auth.NodeID,
+			})
+
+			socket.Emit(EventTerminalStart, map[string]any{
+				"type":      EventTerminalStart,
+				"sessionId": "session-123",
+				"cols":      96,
+				"rows":      28,
+			})
+		})
+
+		socket.OnEvent(EventTerminalOpened, func(payload map[string]any) {
+			select {
+			case openedCh <- payload:
+			default:
+			}
+		})
+	})
+
+	if err := ioServer.Run(); err != nil {
+		t.Fatalf("socket server run: %v", err)
+	}
+	defer ioServer.Close()
+
+	mux := http.NewServeMux()
+	mux.Handle("/socket.io/", ioServer)
+	httpServer := httptest.NewServer(mux)
+	defer httpServer.Close()
+
+	dispatcher := &terminalIntegrationDispatcher{
+		startCh: make(chan terminalStartEvent, 1),
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	svc, err := NewService(
+		httpServer.URL,
+		"/agent-realtime",
+		"/socket.io/",
+		5*time.Second,
+		10*time.Second,
+		32,
+		0.2,
+		logger,
+		func() (string, string) {
+			return "node-1", "token-1"
+		},
+		dispatcher,
+		func(context.Context) {},
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	dispatcher.svc = svc
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.Run(runCtx)
+	}()
+
+	select {
+	case auth := <-authCh:
+		if auth.NodeID != "node-1" || auth.AgentToken != "token-1" {
+			t.Fatalf("unexpected auth payload: %+v", auth)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatalf("timed out waiting for auth event")
+	}
+
+	select {
+	case start := <-dispatcher.startCh:
+		if start.SessionID != "session-123" || start.Cols != 96 || start.Rows != 28 {
+			t.Fatalf("unexpected terminal.start payload: %+v", start)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatalf("timed out waiting for terminal.start")
+	}
+
+	select {
+	case payload := <-openedCh:
+		if payload["sessionId"] != "session-123" || payload["type"] != EventTerminalOpened {
+			t.Fatalf("unexpected terminal.opened payload: %+v", payload)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatalf("timed out waiting for terminal.opened")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for service shutdown")
+	}
+}
+
+func TestRealtimeTerminalStartErrorIsReported(t *testing.T) {
+	ioServer := sio.NewServer(nil)
+	namespace := ioServer.Of("/agent-realtime")
+
+	terminalErrorCh := make(chan map[string]any, 1)
+
+	namespace.OnConnection(func(socket sio.ServerSocket) {
+		socket.OnEvent(EventAgentAuth, func(payload map[string]any) {
+			var auth authEvent
+			b, _ := json.Marshal(payload)
+			_ = json.Unmarshal(b, &auth)
+
+			socket.Emit(EventAgentAuthAck, map[string]any{
+				"authenticated": true,
+				"nodeId":        auth.NodeID,
+			})
+
+			socket.Emit(EventTerminalStart, map[string]any{
+				"type":      EventTerminalStart,
+				"sessionId": "session-error",
+				"cols":      80,
+				"rows":      24,
+			})
+		})
+
+		socket.OnEvent(EventTerminalError, func(payload map[string]any) {
+			select {
+			case terminalErrorCh <- payload:
+			default:
+			}
+		})
+	})
+
+	if err := ioServer.Run(); err != nil {
+		t.Fatalf("socket server run: %v", err)
+	}
+	defer ioServer.Close()
+
+	mux := http.NewServeMux()
+	mux.Handle("/socket.io/", ioServer)
+	httpServer := httptest.NewServer(mux)
+	defer httpServer.Close()
+
+	dispatcher := &terminalIntegrationDispatcher{
+		startCh:  make(chan terminalStartEvent, 1),
+		startErr: errors.New("start failed"),
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	svc, err := NewService(
+		httpServer.URL,
+		"/agent-realtime",
+		"/socket.io/",
+		5*time.Second,
+		10*time.Second,
+		32,
+		0.2,
+		logger,
+		func() (string, string) {
+			return "node-1", "token-1"
+		},
+		dispatcher,
+		func(context.Context) {},
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.Run(runCtx)
+	}()
+
+	select {
+	case payload := <-terminalErrorCh:
+		if payload["sessionId"] != "session-error" || payload["type"] != EventTerminalError {
+			t.Fatalf("unexpected terminal.error payload: %+v", payload)
+		}
+		if payload["message"] != "start failed" {
+			t.Fatalf("unexpected terminal.error message: %+v", payload)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatalf("timed out waiting for terminal.error")
 	}
 
 	cancel()
