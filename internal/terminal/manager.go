@@ -412,7 +412,7 @@ func selectShellCandidates() []string {
 }
 
 func newTerminalCommand(shell string) *exec.Cmd {
-	cmd := exec.Command(shell)
+	cmd := exec.Command(shell, "-i")
 	prepareTerminalCommand(cmd)
 	cmd.Env = mergeEnvironment(map[string]string{
 		"TERM":  "xterm-256color",
