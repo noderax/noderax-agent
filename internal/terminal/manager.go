@@ -289,10 +289,32 @@ func (m *Manager) runSession(ctx context.Context, s *session) {
 }
 
 func (m *Manager) streamPTYOutput(ctx context.Context, s *session) {
+	type readResult struct {
+		data []byte
+		err  error
+	}
+
 	buffer := make([]byte, 4096)
 	var pending bytes.Buffer
 	ticker := time.NewTicker(outputFlushInterval)
 	defer ticker.Stop()
+	readResults := make(chan readResult, 1)
+
+	go func() {
+		for {
+			n, err := s.ptyFile.Read(buffer)
+			payload := append([]byte(nil), buffer[:n]...)
+
+			readResults <- readResult{
+				data: payload,
+				err:  err,
+			}
+
+			if err != nil {
+				return
+			}
+		}
+	}()
 
 	flush := func() {
 		if pending.Len() == 0 {
@@ -312,29 +334,26 @@ func (m *Manager) streamPTYOutput(ctx context.Context, s *session) {
 	}
 
 	for {
-		_ = ctx
-		n, err := s.ptyFile.Read(buffer)
-		if n > 0 {
-			pending.Write(buffer[:n])
-			if pending.Len() >= outputFlushThreshold {
-				flush()
-			}
-		}
-
 		select {
 		case <-ticker.C:
 			flush()
-		default:
-		}
-
-		if err != nil {
-			flush()
-			if !errors.Is(err, os.ErrClosed) && !strings.Contains(strings.ToLower(err.Error()), "input/output error") && !errors.Is(err, context.Canceled) {
-				if m.events != nil {
-					_ = m.events.TerminalError(context.Background(), s.id, err.Error(), time.Now().UTC())
+		case result := <-readResults:
+			if len(result.data) > 0 {
+				pending.Write(result.data)
+				if pending.Len() >= outputFlushThreshold {
+					flush()
 				}
 			}
-			return
+
+			if result.err != nil {
+				flush()
+				if !errors.Is(result.err, os.ErrClosed) && !strings.Contains(strings.ToLower(result.err.Error()), "input/output error") && !errors.Is(result.err, context.Canceled) {
+					if m.events != nil {
+						_ = m.events.TerminalError(context.Background(), s.id, result.err.Error(), time.Now().UTC())
+					}
+				}
+				return
+			}
 		}
 	}
 }

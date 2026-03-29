@@ -139,6 +139,71 @@ func TestTerminalLifecycle(t *testing.T) {
 	t.Fatalf("terminal session did not emit expected output and exit events")
 }
 
+func TestStreamPTYOutputFlushesWithoutAdditionalInput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PTY integration is unix-only in tests")
+	}
+
+	recorder := &eventRecorder{}
+	manager := NewManager(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		recorder,
+	)
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = writer.Close()
+		_ = reader.Close()
+	})
+
+	session := &session{
+		id:      "flush-session",
+		ptyFile: reader,
+	}
+
+	streamDone := make(chan struct{})
+	go func() {
+		defer close(streamDone)
+		manager.streamPTYOutput(context.Background(), session)
+	}()
+
+	if _, err := writer.Write([]byte("prompt> ")); err != nil {
+		t.Fatalf("writer.Write returned error: %v", err)
+	}
+
+	deadline := time.Now().Add(outputFlushInterval * 10)
+	for time.Now().Before(deadline) {
+		recorder.mu.Lock()
+		outputs := append([]string(nil), recorder.outputs...)
+		recorder.mu.Unlock()
+
+		if len(outputs) > 0 {
+			decoded, decodeErr := base64.StdEncoding.DecodeString(outputs[0])
+			if decodeErr != nil {
+				t.Fatalf("failed to decode output payload: %v", decodeErr)
+			}
+			if string(decoded) != "prompt> " {
+				t.Fatalf("unexpected flushed payload: %q", string(decoded))
+			}
+
+			_ = writer.Close()
+			select {
+			case <-streamDone:
+			case <-time.After(2 * time.Second):
+				t.Fatalf("streamPTYOutput did not exit after closing the pipe")
+			}
+			return
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("terminal output was not flushed while the PTY read loop was idle")
+}
+
 func TestStartTerminalCommandFallsBackWithoutControllingTTY(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("PTY integration is unix-only in tests")
