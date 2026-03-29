@@ -7,12 +7,15 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/creack/pty"
 )
 
 type eventRecorder struct {
@@ -134,4 +137,104 @@ func TestTerminalLifecycle(t *testing.T) {
 	}
 
 	t.Fatalf("terminal session did not emit expected output and exit events")
+}
+
+func TestStartTerminalCommandFallsBackWithoutControllingTTY(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PTY integration is unix-only in tests")
+	}
+
+	originalStartWithSize := startPTYWithSize
+	originalStartWithAttrs := startPTYWithAttrs
+	t.Cleanup(func() {
+		startPTYWithSize = originalStartWithSize
+		startPTYWithAttrs = originalStartWithAttrs
+	})
+
+	startPTYWithSize = func(cmd *exec.Cmd, ws *pty.Winsize) (*os.File, error) {
+		return nil, syscall.EPERM
+	}
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+
+	startPTYWithAttrs = func(cmd *exec.Cmd, ws *pty.Winsize, attrs *syscall.SysProcAttr) (*os.File, error) {
+		if attrs == nil || !attrs.Setpgid {
+			t.Fatalf("expected process-group fallback attrs, got %+v", attrs)
+		}
+
+		return reader, nil
+	}
+
+	cmd, ptmx, mode, killProcessGroup, err := startTerminalCommand("/bin/sh", 80, 24)
+	if err != nil {
+		t.Fatalf("startTerminalCommand returned error: %v", err)
+	}
+	if cmd == nil || ptmx == nil {
+		t.Fatalf("expected command and PTY file to be returned")
+	}
+	if mode != terminalStartModeNoControllingTTY {
+		t.Fatalf("unexpected fallback mode: %q", mode)
+	}
+	if !killProcessGroup {
+		t.Fatalf("expected process-group kill mode to remain enabled")
+	}
+}
+
+func TestStartTerminalCommandFallsBackToMinimalMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PTY integration is unix-only in tests")
+	}
+
+	originalStartWithSize := startPTYWithSize
+	originalStartWithAttrs := startPTYWithAttrs
+	t.Cleanup(func() {
+		startPTYWithSize = originalStartWithSize
+		startPTYWithAttrs = originalStartWithAttrs
+	})
+
+	startPTYWithSize = func(cmd *exec.Cmd, ws *pty.Winsize) (*os.File, error) {
+		return nil, syscall.EPERM
+	}
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+
+	startPTYWithAttrs = func(cmd *exec.Cmd, ws *pty.Winsize, attrs *syscall.SysProcAttr) (*os.File, error) {
+		if attrs != nil && attrs.Setpgid {
+			return nil, syscall.EPERM
+		}
+
+		if attrs != nil {
+			t.Fatalf("expected minimal fallback attrs to be nil, got %+v", attrs)
+		}
+
+		return reader, nil
+	}
+
+	cmd, ptmx, mode, killProcessGroup, err := startTerminalCommand("/bin/sh", 80, 24)
+	if err != nil {
+		t.Fatalf("startTerminalCommand returned error: %v", err)
+	}
+	if cmd == nil || ptmx == nil {
+		t.Fatalf("expected command and PTY file to be returned")
+	}
+	if mode != terminalStartModeMinimal {
+		t.Fatalf("unexpected fallback mode: %q", mode)
+	}
+	if killProcessGroup {
+		t.Fatalf("expected minimal fallback to disable process-group kill mode")
+	}
 }

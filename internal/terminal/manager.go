@@ -40,14 +40,15 @@ type RealtimeEvents interface {
 }
 
 type session struct {
-	id             string
-	cmd            *exec.Cmd
-	ptyFile        *os.File
-	cols           int
-	rows           int
-	done           chan struct{}
-	stopReason     string
-	stopReasonLock sync.Mutex
+	id               string
+	cmd              *exec.Cmd
+	ptyFile          *os.File
+	killProcessGroup bool
+	cols             int
+	rows             int
+	done             chan struct{}
+	stopReason       string
+	stopReasonLock   sync.Mutex
 }
 
 type Manager struct {
@@ -90,27 +91,24 @@ func (m *Manager) StartSession(
 	}
 
 	var (
-		cmd         *exec.Cmd
-		ptmx        *os.File
-		startErrors []string
+		cmd              *exec.Cmd
+		ptmx             *os.File
+		startMode        string
+		killProcessGroup bool
+		startErrors      []string
 	)
 
 	for _, shell := range shellCandidates {
-		candidateCmd := exec.Command(shell)
-		prepareTerminalCommand(candidateCmd)
-		candidateCmd.Env = mergeEnvironment(map[string]string{
-			"TERM":  "xterm-256color",
-			"PAGER": "cat",
-		})
-		candidateCmd.Dir = resolveWorkingDir()
-
-		candidatePTY, candidateErr := pty.StartWithSize(candidateCmd, &pty.Winsize{
-			Cols: uint16(normalizedCols),
-			Rows: uint16(normalizedRows),
-		})
+		candidateCmd, candidatePTY, candidateMode, candidateKillProcessGroup, candidateErr := startTerminalCommand(
+			shell,
+			normalizedCols,
+			normalizedRows,
+		)
 		if candidateErr == nil {
 			cmd = candidateCmd
 			ptmx = candidatePTY
+			startMode = candidateMode
+			killProcessGroup = candidateKillProcessGroup
 			break
 		}
 
@@ -131,12 +129,13 @@ func (m *Manager) StartSession(
 	}
 
 	s := &session{
-		id:      sessionID,
-		cmd:     cmd,
-		ptyFile: ptmx,
-		cols:    normalizedCols,
-		rows:    normalizedRows,
-		done:    make(chan struct{}),
+		id:               sessionID,
+		cmd:              cmd,
+		ptyFile:          ptmx,
+		killProcessGroup: killProcessGroup,
+		cols:             normalizedCols,
+		rows:             normalizedRows,
+		done:             make(chan struct{}),
 	}
 
 	m.mu.Lock()
@@ -150,6 +149,14 @@ func (m *Manager) StartSession(
 	}
 	m.sessions[sessionID] = s
 	m.mu.Unlock()
+
+	if startMode != "" && startMode != terminalStartModeControllingTTY {
+		m.logger.Info(
+			"started terminal session using PTY fallback mode",
+			"session_id", sessionID,
+			"start_mode", startMode,
+		)
+	}
 
 	go m.runSession(ctx, s)
 
@@ -231,7 +238,7 @@ func (m *Manager) StopSession(
 	s.stopReason = strings.TrimSpace(reason)
 	s.stopReasonLock.Unlock()
 
-	if err := killTerminalCommand(s.cmd); err != nil {
+	if err := killTerminalCommand(s.cmd, s.killProcessGroup); err != nil {
 		return fmt.Errorf("stop terminal session: %w", err)
 	}
 
@@ -402,6 +409,17 @@ func selectShellCandidates() []string {
 	}
 
 	return resolvedCandidates
+}
+
+func newTerminalCommand(shell string) *exec.Cmd {
+	cmd := exec.Command(shell)
+	prepareTerminalCommand(cmd)
+	cmd.Env = mergeEnvironment(map[string]string{
+		"TERM":  "xterm-256color",
+		"PAGER": "cat",
+	})
+	cmd.Dir = resolveWorkingDir()
+	return cmd
 }
 
 func resolveWorkingDir() string {
