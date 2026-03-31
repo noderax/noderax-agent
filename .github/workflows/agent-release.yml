@@ -113,13 +113,57 @@ jobs:
         run: ls -lah ./dist/release
 
       - name: Validate R2 configuration
+        id: r2
         shell: bash
         run: |
           set -euo pipefail
+
+          trim() {
+            local value="${1:-}"
+            value="${value#"${value%%[![:space:]]*}"}"
+            value="${value%"${value##*[![:space:]]}"}"
+            printf '%s' "${value}"
+          }
+
           : "${AWS_ACCESS_KEY_ID:?Missing R2_ACCESS_KEY_ID secret}"
           : "${AWS_SECRET_ACCESS_KEY:?Missing R2_SECRET_ACCESS_KEY secret}"
           : "${R2_ACCOUNT_ID:?Missing R2_ACCOUNT_ID secret}"
           : "${R2_BUCKET:?Missing R2_BUCKET secret}"
+
+          raw_bucket="$(trim "${R2_BUCKET}")"
+
+          if [[ "${raw_bucket}" == s3://* ]]; then
+            raw_bucket="${raw_bucket#s3://}"
+          fi
+
+          if [[ "${raw_bucket}" == http://* || "${raw_bucket}" == https://* ]]; then
+            path_part="${raw_bucket#http://}"
+            path_part="${path_part#https://}"
+            if [[ "${path_part}" != */* ]]; then
+              echo "R2_BUCKET must be the bucket name only, not a URL without a bucket path." >&2
+              echo "Example: media-assets" >&2
+              exit 1
+            fi
+            raw_bucket="${path_part#*/}"
+          fi
+
+          raw_bucket="${raw_bucket#/}"
+          raw_bucket="${raw_bucket%%/*}"
+
+          if [[ -z "${raw_bucket}" ]]; then
+            echo "Resolved R2 bucket name is empty. Set R2_BUCKET to your bucket name, for example media-assets." >&2
+            exit 1
+          fi
+
+          if [[ ! "${raw_bucket}" =~ ^[a-zA-Z0-9._-]{1,255}$ ]]; then
+            echo "Resolved R2 bucket name is invalid: ${raw_bucket}" >&2
+            echo "Set R2_BUCKET to the plain bucket name only, without https:// or extra path segments." >&2
+            exit 1
+          fi
+
+          echo "bucket_name=${raw_bucket}" >> "${GITHUB_OUTPUT}"
+          echo "endpoint_url=https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" >> "${GITHUB_OUTPUT}"
+
           aws --version
 
       - name: Publish installer and latest channel
@@ -127,8 +171,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          bucket="s3://${R2_BUCKET}"
+          endpoint="${{ steps.r2.outputs.endpoint_url }}"
+          bucket="s3://${{ steps.r2.outputs.bucket_name }}"
 
           aws s3 cp ./dist/release/install.sh "${bucket}/noderax-agent/install.sh" \
             --endpoint-url "${endpoint}" \
@@ -155,8 +199,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          bucket="s3://${R2_BUCKET}"
+          endpoint="${{ steps.r2.outputs.endpoint_url }}"
+          bucket="s3://${{ steps.r2.outputs.bucket_name }}"
           version="${{ steps.release.outputs.release_version }}"
 
           aws s3 cp ./dist/release/noderax-agent-linux-amd64 "${bucket}/noderax-agent/releases/${version}/noderax-agent-linux-amd64" \

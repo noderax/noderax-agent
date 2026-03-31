@@ -71,6 +71,17 @@ Required GitHub secrets:
 - `R2_SECRET_ACCESS_KEY`
 - `R2_BUCKET`
 
+`R2_BUCKET` plain bucket name olmalı. URL veya custom domain verme.
+
+Doğru örnek:
+
+- `R2_BUCKET=noderax-assets`
+
+Yanlış örnekler:
+
+- `R2_BUCKET=https://cdn.noderax.net`
+- `R2_BUCKET=https://<accountid>.r2.cloudflarestorage.com/noderax-assets`
+
 Trigger behavior:
 
 - Pushes to `main` refresh `install.sh` and the `latest` binaries
