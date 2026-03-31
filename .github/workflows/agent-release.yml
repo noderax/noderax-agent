@@ -166,6 +166,20 @@ jobs:
 
           aws --version
 
+      - name: Verify R2 bucket exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="${{ steps.r2.outputs.endpoint_url }}"
+          bucket="${{ steps.r2.outputs.bucket_name }}"
+
+          if ! aws s3api head-bucket --bucket "${bucket}" --endpoint-url "${endpoint}" >/dev/null 2>&1; then
+            echo "R2 bucket '${bucket}' was not found for the configured account/credentials." >&2
+            echo "Check that R2_BUCKET matches the exact bucket name in Cloudflare R2." >&2
+            echo "Also confirm R2_ACCOUNT_ID and the access keys belong to the same Cloudflare account as that bucket." >&2
+            exit 1
+          fi
+
       - name: Publish installer and latest channel
         if: steps.release.outputs.publish_latest == 'true'
         shell: bash

@@ -82,6 +82,12 @@ Yanlış örnekler:
 - `R2_BUCKET=https://cdn.noderax.net`
 - `R2_BUCKET=https://<accountid>.r2.cloudflarestorage.com/noderax-assets`
 
+Workflow publish öncesi bucket varlığını da kontrol eder. `NoSuchBucket` alırsan genelde şu üç sebepten biridir:
+
+- `R2_BUCKET` değeri gerçek bucket adı değildir
+- `R2_ACCOUNT_ID` farklı bir Cloudflare hesabına aittir
+- access key çifti bucket’ın bulunduğu hesaba ait değildir
+
 Trigger behavior:
 
 - Pushes to `main` refresh `install.sh` and the `latest` binaries
