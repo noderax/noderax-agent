@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eEuo pipefail
 
 normalize_value() {
   local value="${1:-}"
@@ -28,12 +28,91 @@ LOG_LEVEL="$(normalize_value "${NODERAX_AGENT_LOG_LEVEL:-info}")"
 API_URL=""
 BOOTSTRAP_TOKEN=""
 BINARY_URL="$(normalize_value "${NODERAX_AGENT_BINARY_URL:-}")"
+CURRENT_PROGRESS=0
+CURRENT_STATUS="installing"
+CURRENT_STAGE="command_generated"
+CURRENT_MESSAGE="Installer is waiting to start."
 
 usage() {
   cat <<'EOF'
 Usage: install.sh --api-url <url> --bootstrap-token <token> [--log-level <level>] [--version <release>]
 EOF
 }
+
+normalize_api_origin() {
+  local value="${1:-}"
+
+  value="$(normalize_value "${value}")"
+  value="${value%/}"
+  value="${value%/api/v1}"
+  value="${value%/v1}"
+
+  printf '%s' "${value}"
+}
+
+json_escape() {
+  local value="${1:-}"
+
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+
+  printf '%s' "${value}"
+}
+
+report_progress() {
+  local stage="${1:-}"
+  local progress="${2:-0}"
+  local status="${3:-installing}"
+  local message="${4:-}"
+  local endpoint payload
+
+  stage="$(normalize_value "${stage}")"
+  progress="$(normalize_value "${progress}")"
+  status="$(normalize_value "${status}")"
+  message="$(normalize_value "${message}")"
+
+  [[ -z "${API_URL}" || -z "${BOOTSTRAP_TOKEN}" || -z "${stage}" ]] && return 0
+
+  CURRENT_STAGE="${stage}"
+  CURRENT_PROGRESS="${progress:-0}"
+  CURRENT_STATUS="${status:-installing}"
+  CURRENT_MESSAGE="${message}"
+
+  endpoint="$(normalize_api_origin "${API_URL}")/api/v1/node-installs/progress"
+  payload=$(
+    printf '{"token":"%s","stage":"%s","status":"%s","progressPercent":%s,"statusMessage":"%s"}' \
+      "$(json_escape "${BOOTSTRAP_TOKEN}")" \
+      "$(json_escape "${CURRENT_STAGE}")" \
+      "$(json_escape "${CURRENT_STATUS}")" \
+      "${CURRENT_PROGRESS:-0}" \
+      "$(json_escape "${CURRENT_MESSAGE}")"
+  )
+
+  curl -fsS \
+    -H "Content-Type: application/json" \
+    -X POST \
+    "${endpoint}" \
+    -d "${payload}" >/dev/null || true
+}
+
+on_error() {
+  local exit_code=$?
+
+  if [[ "${exit_code}" -ne 0 ]]; then
+    report_progress \
+      "failed" \
+      "${CURRENT_PROGRESS:-0}" \
+      "failed" \
+      "${CURRENT_MESSAGE:-Installer failed before it could complete.}"
+  fi
+
+  exit "${exit_code}"
+}
+
+trap on_error ERR
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -79,6 +158,8 @@ if [[ -z "${API_URL}" || -z "${BOOTSTRAP_TOKEN}" ]]; then
   exit 1
 fi
 
+API_URL="$(normalize_api_origin "${API_URL}")"
+
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run this installer as root. Example: curl -fsSL https://cdn.noderax.net/noderax-agent/install.sh | sudo bash -s -- --api-url ${API_URL} --bootstrap-token <token>" >&2
   exit 1
@@ -107,6 +188,12 @@ if ! command -v apt-get >/dev/null 2>&1; then
   exit 1
 fi
 
+report_progress \
+  "installer_started" \
+  8 \
+  "installing" \
+  "Installer started on the target server."
+
 MISSING_PACKAGES=()
 if ! command -v curl >/dev/null 2>&1; then
   MISSING_PACKAGES+=("curl")
@@ -119,9 +206,20 @@ if ! dpkg -s ca-certificates >/dev/null 2>&1; then
 fi
 
 if [[ "${#MISSING_PACKAGES[@]}" -gt 0 ]]; then
+  report_progress \
+    "dependencies_installing" \
+    18 \
+    "installing" \
+    "Installing required operating system packages."
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y "${MISSING_PACKAGES[@]}"
 fi
+
+report_progress \
+  "dependencies_ready" \
+  30 \
+  "installing" \
+  "Required operating system packages are ready."
 
 if ! command -v systemctl >/dev/null 2>&1; then
   echo "systemd is required on the target host." >&2
@@ -145,6 +243,12 @@ fi
 mkdir -p "${INSTALL_DIR}" "${CONFIG_DIR}" "${STATE_DIR}"
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}" "${CONFIG_DIR}" "${STATE_DIR}"
 chmod 0755 "${INSTALL_DIR}" "${CONFIG_DIR}" "${STATE_DIR}"
+
+report_progress \
+  "service_user_ready" \
+  45 \
+  "installing" \
+  "Preparing the noderax service account and runtime directories."
 
 SUDOERS_FILE="/etc/sudoers.d/noderax-agent"
 printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${SERVICE_USER}" > "${SUDOERS_FILE}"
@@ -181,14 +285,38 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 TMP_BINARY="${TMP_DIR}/noderax-agent"
 
+report_progress \
+  "binary_download_started" \
+  60 \
+  "installing" \
+  "Downloading the Noderax agent binary."
+
 echo "Downloading Noderax Agent binary from ${BINARY_URL}"
 curl -fsSL "${BINARY_URL}" -o "${TMP_BINARY}"
 chmod 0755 "${TMP_BINARY}"
 
+report_progress \
+  "binary_downloaded" \
+  74 \
+  "installing" \
+  "Agent binary downloaded. Bootstrapping node credentials next."
+
 export NODERAX_CONFIG_MIRROR_FILE=""
+
+report_progress \
+  "agent_bootstrapping" \
+  88 \
+  "installing" \
+  "Bootstrapping node credentials and writing service config."
 
 "${TMP_BINARY}" install \
   --non-interactive \
   --api-url "${API_URL}" \
   --bootstrap-token "${BOOTSTRAP_TOKEN}" \
   --log-level "${LOG_LEVEL}"
+
+report_progress \
+  "service_started" \
+  100 \
+  "completed" \
+  "Agent installed successfully and the noderax service is running."
