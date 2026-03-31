@@ -22,7 +22,7 @@ INSTALL_DIR="$(normalize_value "${NODERAX_AGENT_INSTALL_DIR:-/opt/noderax-agent}
 CONFIG_DIR="$(normalize_value "${NODERAX_AGENT_CONFIG_DIR:-/etc/noderax-agent}")"
 STATE_DIR="$(normalize_value "${NODERAX_AGENT_STATE_DIR:-/var/lib/noderax-agent}")"
 DOWNLOAD_BASE_URL="$(normalize_value "${NODERAX_AGENT_DOWNLOAD_BASE_URL:-https://cdn.noderax.net/noderax-agent/releases}")"
-VERSION="$(normalize_value "${NODERAX_AGENT_VERSION:-latest}")"
+AGENT_VERSION="$(normalize_value "${NODERAX_AGENT_VERSION:-latest}")"
 LOG_LEVEL="$(normalize_value "${NODERAX_AGENT_LOG_LEVEL:-info}")"
 
 API_URL=""
@@ -53,8 +53,8 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --version)
-      VERSION="${2:-}"
-      VERSION="$(normalize_value "${VERSION}")"
+      AGENT_VERSION="${2:-}"
+      AGENT_VERSION="$(normalize_value "${AGENT_VERSION}")"
       shift 2
       ;;
     --binary-url)
@@ -168,7 +168,7 @@ case "${ARCH}" in
 esac
 
 if [[ -z "${BINARY_URL}" ]]; then
-  BINARY_URL="${DOWNLOAD_BASE_URL}/${VERSION}/noderax-agent-linux-${ARCH}"
+  BINARY_URL="${DOWNLOAD_BASE_URL}/${AGENT_VERSION}/noderax-agent-linux-${ARCH}"
 fi
 
 if [[ ! "${BINARY_URL}" =~ ^https?://[^[:space:]]+$ ]]; then

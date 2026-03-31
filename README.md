@@ -50,6 +50,35 @@ The installer:
 - bootstraps the node with the provided token
 - installs and starts the background service automatically
 
+## R2 Release Automation
+
+Agent release assets can be published to Cloudflare R2 automatically by the GitHub Actions workflow at [`.github/workflows/agent-release.yml`](../.github/workflows/agent-release.yml).
+
+Expected R2 object layout:
+
+- `noderax-agent/install.sh`
+- `noderax-agent/releases/latest/noderax-agent-linux-amd64`
+- `noderax-agent/releases/latest/noderax-agent-linux-arm64`
+- `noderax-agent/releases/latest/SHA256SUMS`
+- `noderax-agent/releases/<version>/noderax-agent-linux-amd64`
+- `noderax-agent/releases/<version>/noderax-agent-linux-arm64`
+- `noderax-agent/releases/<version>/SHA256SUMS`
+
+Required GitHub secrets:
+
+- `R2_ACCOUNT_ID`
+- `R2_ACCESS_KEY_ID`
+- `R2_SECRET_ACCESS_KEY`
+- `R2_BUCKET`
+
+Trigger behavior:
+
+- Pushes to `main` refresh `install.sh` and the `latest` binaries
+- Tags matching `agent-v*` publish a versioned channel and also refresh `latest`
+- Manual runs can publish any URL-safe release slug through `workflow_dispatch`
+
+The workflow builds Linux `amd64` and `arm64` binaries, injects version metadata into the Go binary, and uploads the artifacts directly to R2 through the S3-compatible endpoint.
+
 ## Installed Paths
 
 ### Linux (systemd)

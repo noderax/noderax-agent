@@ -2,3 +2,4 @@ data/
 config.local.json
 noderax-agent
 config.json
+dist/
