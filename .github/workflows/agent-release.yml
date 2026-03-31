@@ -1,0 +1,175 @@
+name: Publish Agent Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - agent-v*
+    paths:
+      - .github/workflows/agent-release.yml
+      - cmd/**
+      - internal/**
+      - scripts/**
+      - go.mod
+      - go.sum
+      - README.md
+      - config.example.json
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Optional release slug such as 0.1.0
+        required: false
+        type: string
+      publish_latest:
+        description: Also refresh the latest channel
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: agent-release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build and publish agent artifacts
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_REGION: auto
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Test
+        run: go test ./...
+
+      - name: Resolve release metadata
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          trim() {
+            local value="${1:-}"
+            value="${value#"${value%%[![:space:]]*}"}"
+            value="${value%"${value##*[![:space:]]}"}"
+            printf '%s' "${value}"
+          }
+
+          release_version=""
+          publish_latest="true"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            release_version="$(trim "${{ inputs.release_version }}")"
+            publish_latest="${{ inputs.publish_latest }}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            release_version="$(trim "${GITHUB_REF_NAME#agent-v}")"
+          fi
+
+          if [[ -n "${release_version}" && ! "${release_version}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "Release version must be URL-safe. Got: ${release_version}" >&2
+            exit 1
+          fi
+
+          binary_version="${release_version}"
+          if [[ -z "${binary_version}" ]]; then
+            binary_version="main-${GITHUB_SHA::7}"
+          fi
+
+          build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          echo "release_version=${release_version}" >> "${GITHUB_OUTPUT}"
+          echo "binary_version=${binary_version}" >> "${GITHUB_OUTPUT}"
+          echo "publish_latest=${publish_latest}" >> "${GITHUB_OUTPUT}"
+          echo "build_date=${build_date}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/build-release.sh
+          ./scripts/build-release.sh \
+            --version "${{ steps.release.outputs.binary_version }}" \
+            --commit "${GITHUB_SHA}" \
+            --build-date "${{ steps.release.outputs.build_date }}" \
+            --output-dir "./dist/release"
+
+      - name: Show release assets
+        run: ls -lah ./dist/release
+
+      - name: Validate R2 configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${AWS_ACCESS_KEY_ID:?Missing R2_ACCESS_KEY_ID secret}"
+          : "${AWS_SECRET_ACCESS_KEY:?Missing R2_SECRET_ACCESS_KEY secret}"
+          : "${R2_ACCOUNT_ID:?Missing R2_ACCOUNT_ID secret}"
+          : "${R2_BUCKET:?Missing R2_BUCKET secret}"
+          aws --version
+
+      - name: Publish installer and latest channel
+        if: steps.release.outputs.publish_latest == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          bucket="s3://${R2_BUCKET}"
+
+          aws s3 cp ./dist/release/install.sh "${bucket}/noderax-agent/install.sh" \
+            --endpoint-url "${endpoint}" \
+            --cache-control "public, max-age=300" \
+            --content-type "text/x-shellscript; charset=utf-8"
+
+          aws s3 cp ./dist/release/noderax-agent-linux-amd64 "${bucket}/noderax-agent/releases/latest/noderax-agent-linux-amd64" \
+            --endpoint-url "${endpoint}" \
+            --cache-control "public, max-age=300" \
+            --content-type "application/octet-stream"
+
+          aws s3 cp ./dist/release/noderax-agent-linux-arm64 "${bucket}/noderax-agent/releases/latest/noderax-agent-linux-arm64" \
+            --endpoint-url "${endpoint}" \
+            --cache-control "public, max-age=300" \
+            --content-type "application/octet-stream"
+
+          aws s3 cp ./dist/release/SHA256SUMS "${bucket}/noderax-agent/releases/latest/SHA256SUMS" \
+            --endpoint-url "${endpoint}" \
+            --cache-control "public, max-age=300" \
+            --content-type "text/plain; charset=utf-8"
+
+      - name: Publish versioned channel
+        if: steps.release.outputs.release_version != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          bucket="s3://${R2_BUCKET}"
+          version="${{ steps.release.outputs.release_version }}"
+
+          aws s3 cp ./dist/release/noderax-agent-linux-amd64 "${bucket}/noderax-agent/releases/${version}/noderax-agent-linux-amd64" \
+            --endpoint-url "${endpoint}" \
+            --cache-control "public, max-age=31536000, immutable" \
+            --content-type "application/octet-stream"
+
+          aws s3 cp ./dist/release/noderax-agent-linux-arm64 "${bucket}/noderax-agent/releases/${version}/noderax-agent-linux-arm64" \
+            --endpoint-url "${endpoint}" \
+            --cache-control "public, max-age=31536000, immutable" \
+            --content-type "application/octet-stream"
+
+          aws s3 cp ./dist/release/SHA256SUMS "${bucket}/noderax-agent/releases/${version}/SHA256SUMS" \
+            --endpoint-url "${endpoint}" \
+            --cache-control "public, max-age=31536000, immutable" \
+            --content-type "text/plain; charset=utf-8"

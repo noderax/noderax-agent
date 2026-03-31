@@ -52,7 +52,7 @@ The installer:
 
 ## R2 Release Automation
 
-Agent release assets can be published to Cloudflare R2 automatically by the GitHub Actions workflow at [`.github/workflows/agent-release.yml`](../.github/workflows/agent-release.yml).
+Agent release assets can be published to Cloudflare R2 automatically by the GitHub Actions workflow at [`.github/workflows/agent-release.yml`](./.github/workflows/agent-release.yml).
 
 Expected R2 object layout:
 
