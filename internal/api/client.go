@@ -96,6 +96,17 @@ func (c *Client) GetEnrollment(ctx context.Context, token string) (EnrollmentSta
 	return response, nil
 }
 
+func (c *Client) ConsumeNodeInstall(
+	ctx context.Context,
+	request ConsumeNodeInstallRequest,
+) (ConsumeNodeInstallResponse, error) {
+	var response ConsumeNodeInstallResponse
+	if err := c.post(ctx, apiPath("/node-installs/consume"), request, &response); err != nil {
+		return ConsumeNodeInstallResponse{}, err
+	}
+	return response, nil
+}
+
 func (c *Client) ClaimTask(ctx context.Context, request ClaimTaskRequest) (ClaimTaskResponse, error) {
 	var response ClaimTaskResponse
 	if err := c.post(ctx, apiPath("/agent/tasks/claim"), request, &response); err != nil {

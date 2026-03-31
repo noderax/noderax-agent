@@ -374,11 +374,15 @@ func (e *ShellExecutor) packageInstallCommand(payload json.RawMessage) (commandS
 	}
 
 	args := append([]string{"install", "-y", "--"}, packages...)
+	commandName, commandArgs, err := e.wrapWithSudo(aptGetPath, args)
+	if err != nil {
+		return commandSpec{}, err
+	}
 	return commandSpec{
-		name:         aptGetPath,
-		args:         args,
+		name:         commandName,
+		args:         commandArgs,
 		env:          map[string]string{"DEBIAN_FRONTEND": "noninteractive"},
-		startMessage: fmt.Sprintf("running %s", formatCommandForLog(aptGetPath, args)),
+		startMessage: fmt.Sprintf("running %s", formatCommandForLog(commandName, commandArgs)),
 	}, nil
 }
 
@@ -408,11 +412,15 @@ func (e *ShellExecutor) packageRemoveCommand(payload json.RawMessage) (commandSp
 	}
 
 	args := append([]string{action, "-y", "--"}, packages...)
+	commandName, commandArgs, err := e.wrapWithSudo(aptGetPath, args)
+	if err != nil {
+		return commandSpec{}, err
+	}
 	return commandSpec{
-		name:         aptGetPath,
-		args:         args,
+		name:         commandName,
+		args:         commandArgs,
 		env:          map[string]string{"DEBIAN_FRONTEND": "noninteractive"},
-		startMessage: fmt.Sprintf("running %s", formatCommandForLog(aptGetPath, args)),
+		startMessage: fmt.Sprintf("running %s", formatCommandForLog(commandName, commandArgs)),
 	}, nil
 }
 
@@ -437,11 +445,15 @@ func (e *ShellExecutor) packagePurgeCommand(payload json.RawMessage) (commandSpe
 	}
 
 	args := append([]string{"purge", "-y", "--"}, packages...)
+	commandName, commandArgs, err := e.wrapWithSudo(aptGetPath, args)
+	if err != nil {
+		return commandSpec{}, err
+	}
 	return commandSpec{
-		name:         aptGetPath,
-		args:         args,
+		name:         commandName,
+		args:         commandArgs,
 		env:          map[string]string{"DEBIAN_FRONTEND": "noninteractive"},
-		startMessage: fmt.Sprintf("running %s", formatCommandForLog(aptGetPath, args)),
+		startMessage: fmt.Sprintf("running %s", formatCommandForLog(commandName, commandArgs)),
 	}, nil
 }
 
@@ -459,6 +471,22 @@ func (e *ShellExecutor) requireBinary(name string) (string, error) {
 		return "", fmt.Errorf("%w: required binary %q is not available", ErrUnsupportedExecutionEnvironment, name)
 	}
 	return path, nil
+}
+
+func (e *ShellExecutor) wrapWithSudo(
+	commandName string,
+	args []string,
+) (string, []string, error) {
+	if os.Geteuid() == 0 {
+		return commandName, args, nil
+	}
+
+	sudoPath, err := e.lookPath("sudo")
+	if err != nil {
+		return commandName, args, nil
+	}
+
+	return sudoPath, append([]string{"-n", commandName}, args...), nil
 }
 
 func decodeShellPayload(payload json.RawMessage) (ShellExecPayload, error) {
@@ -603,7 +631,7 @@ type PackageInfo struct {
 func parsePackageList(output string, onLog func(string, string)) any {
 	results := make([]PackageInfo, 0)
 	lines := strings.Split(output, "\n")
-	
+
 	var formatDpkg, formatApt, formatCompact int
 
 	for _, line := range lines {
@@ -688,7 +716,7 @@ func parsePackageList(output string, onLog func(string, string)) any {
 func parsePackageSearch(output string, onLog func(string, string)) any {
 	results := make([]PackageInfo, 0)
 	lines := strings.Split(output, "\n")
-	
+
 	var currentPkg *PackageInfo
 	for i := 0; i < len(lines); i++ {
 		line := strings.TrimRight(lines[i], "\r\t ")

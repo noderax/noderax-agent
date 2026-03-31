@@ -22,9 +22,11 @@ type RegisterResponse struct {
 }
 
 type EnrollmentAdditionalInfo struct {
-	OS           string `json:"os,omitempty"`
-	Arch         string `json:"arch,omitempty"`
-	AgentVersion string `json:"agentVersion,omitempty"`
+	OS              string `json:"os,omitempty"`
+	Arch            string `json:"arch,omitempty"`
+	AgentVersion    string `json:"agentVersion,omitempty"`
+	PlatformVersion string `json:"platformVersion,omitempty"`
+	KernelVersion   string `json:"kernelVersion,omitempty"`
 }
 
 type InitiateEnrollmentRequest struct {
@@ -36,6 +38,17 @@ type InitiateEnrollmentRequest struct {
 type InitiateEnrollmentResponse struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expiresAt,omitempty"`
+}
+
+type ConsumeNodeInstallRequest struct {
+	Token          string                   `json:"token"`
+	Hostname       string                   `json:"hostname"`
+	AdditionalInfo EnrollmentAdditionalInfo `json:"additionalInfo"`
+}
+
+type ConsumeNodeInstallResponse struct {
+	NodeID     string `json:"nodeId"`
+	AgentToken string `json:"agentToken"`
 }
 
 type EnrollmentStatusResponse struct {

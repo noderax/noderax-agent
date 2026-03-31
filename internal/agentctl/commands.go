@@ -4,13 +4,16 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +34,8 @@ const (
 	linuxStatePath   = "/var/lib/noderax-agent/agent_identity.json"
 	linuxServiceUnit = "/etc/systemd/system/noderax-agent.service"
 	linuxServiceName = "noderax-agent.service"
+	linuxServiceUser = "noderax"
+	linuxServiceHome = "/var/lib/noderax-agent"
 
 	macOSInstallDir  = "/usr/local/lib/noderax-agent"
 	macOSBinaryPath  = macOSInstallDir + "/noderax-agent"
@@ -55,6 +60,25 @@ type platformSpec struct {
 	ServiceDomain string
 	LogStdoutPath string
 	LogStderrPath string
+	ServiceUser   string
+	ServiceGroup  string
+	ServiceHome   string
+}
+
+type installOptions struct {
+	APIURL         string
+	BootstrapToken string
+	LogLevel       string
+	NonInteractive bool
+}
+
+type bootstrapOptions struct {
+	APIURL         string
+	BootstrapToken string
+	ConfigFile     string
+	StateFile      string
+	LogLevel       string
+	NonInteractive bool
 }
 
 type CLI struct {
@@ -73,7 +97,9 @@ func (c CLI) Handle(ctx context.Context, args []string) (bool, error) {
 	switch args[0] {
 	case "install":
 		brand.PrintLogo(c.stdoutOrDefault())
-		return true, c.Install(ctx)
+		return true, c.Install(ctx, args[1:])
+	case "bootstrap":
+		return true, c.Bootstrap(ctx, args[1:])
 	case "uninstall":
 		brand.PrintLogo(c.stdoutOrDefault())
 		return true, c.Uninstall(ctx)
@@ -88,7 +114,7 @@ func (c CLI) Handle(ctx context.Context, args []string) (bool, error) {
 	}
 }
 
-func (c CLI) Install(ctx context.Context) error {
+func (c CLI) Install(ctx context.Context, args []string) error {
 	spec, err := currentPlatformSpec()
 	if err != nil {
 		return err
@@ -99,6 +125,10 @@ func (c CLI) Install(ctx context.Context) error {
 		}
 	}
 	if err := ensureServiceManager(spec); err != nil {
+		return err
+	}
+	options, err := parseInstallOptions(args)
+	if err != nil {
 		return err
 	}
 
@@ -112,23 +142,37 @@ func (c CLI) Install(ctx context.Context) error {
 		cfg.StateFile = spec.StatePath
 	}
 
-	reader := bufio.NewReader(c.stdinOrDefault())
-	apiURL, err := promptValue(reader, c.stdoutOrDefault(), "API URL", cfg.APIURL, true)
-	if err != nil {
-		return err
-	}
-	logLevel, err := promptValue(reader, c.stdoutOrDefault(), "Log level", cfg.LogLevel, false)
-	if err != nil {
-		return err
-	}
+	if options.NonInteractive {
+		cfg.APIURL = firstNonEmpty(options.APIURL, cfg.APIURL)
+		cfg.LogLevel = firstNonEmpty(options.LogLevel, cfg.LogLevel)
+		cfg.EnrollmentToken = strings.TrimSpace(options.BootstrapToken)
+		if strings.TrimSpace(cfg.APIURL) == "" {
+			return fmt.Errorf("non-interactive install requires --api-url")
+		}
+		if strings.TrimSpace(cfg.EnrollmentToken) == "" {
+			return fmt.Errorf("non-interactive install requires --bootstrap-token")
+		}
+	} else {
+		reader := bufio.NewReader(c.stdinOrDefault())
+		apiURL, err := promptValue(reader, c.stdoutOrDefault(), "API URL", cfg.APIURL, true)
+		if err != nil {
+			return err
+		}
+		logLevel, err := promptValue(reader, c.stdoutOrDefault(), "Log level", cfg.LogLevel, false)
+		if err != nil {
+			return err
+		}
 
-	cfg.APIURL = apiURL
-	if logLevel != "" {
-		cfg.LogLevel = logLevel
+		cfg.APIURL = apiURL
+		if logLevel != "" {
+			cfg.LogLevel = logLevel
+		}
 	}
 	cfg.ConfigFile = managedConfigPath(spec)
 	cfg.StateFile = spec.StatePath
-	cfg.EnrollmentToken = ""
+	if !options.NonInteractive {
+		cfg.EnrollmentToken = ""
+	}
 	cfg.NodeID = ""
 	cfg.AgentToken = ""
 
@@ -137,6 +181,9 @@ func (c CLI) Install(ctx context.Context) error {
 	}
 	if err := config.SaveFile(cfg.ConfigFile, cfg); err != nil {
 		return fmt.Errorf("write config file: %w", err)
+	}
+	if err := ensureOwnership(spec.ServiceUser, spec.ServiceGroup, cfg.ConfigFile); err != nil {
+		return err
 	}
 
 	executablePath, err := os.Executable()
@@ -169,9 +216,15 @@ func (c CLI) Install(ctx context.Context) error {
 		return fmt.Errorf("unsupported service manager %q", spec.Manager)
 	}
 
-	client := api.NewClient(cfg.APIURL, cfg.RequestTimeout)
-	if err := agent.RunInteractiveEnrollment(ctx, cfg, client, c.Logger, c.Version, c.stdinOrDefault(), c.stdoutOrDefault()); err != nil {
-		return err
+	if options.NonInteractive {
+		if err := c.bootstrapManagedInstall(ctx, spec, cfg); err != nil {
+			return err
+		}
+	} else {
+		client := api.NewClient(cfg.APIURL, cfg.RequestTimeout)
+		if err := agent.RunInteractiveEnrollment(ctx, cfg, client, c.Logger, c.Version, c.stdinOrDefault(), c.stdoutOrDefault()); err != nil {
+			return err
+		}
 	}
 
 	if err := c.enableAndStartService(ctx, spec); err != nil {
@@ -180,6 +233,58 @@ func (c CLI) Install(ctx context.Context) error {
 
 	_, _ = fmt.Fprint(c.stdoutOrDefault(), renderInstallSummary(spec, cfg, c.Version, mirroredConfigPath(cfg.ConfigFile)))
 	return nil
+}
+
+func (c CLI) Bootstrap(ctx context.Context, args []string) error {
+	options, err := parseBootstrapOptions(args)
+	if err != nil {
+		return err
+	}
+	if !options.NonInteractive {
+		return fmt.Errorf("bootstrap currently requires --non-interactive")
+	}
+
+	cfg := config.Default()
+	if strings.TrimSpace(options.ConfigFile) != "" {
+		if existing, err := config.LoadFile(options.ConfigFile); err == nil {
+			cfg = existing
+		}
+		cfg.ConfigFile = options.ConfigFile
+	}
+
+	cfg.APIURL = firstNonEmpty(options.APIURL, cfg.APIURL)
+	cfg.StateFile = firstNonEmpty(options.StateFile, cfg.StateFile)
+	cfg.LogLevel = firstNonEmpty(options.LogLevel, cfg.LogLevel)
+	cfg.EnrollmentToken = strings.TrimSpace(options.BootstrapToken)
+	cfg.NodeID = ""
+	cfg.AgentToken = ""
+
+	if strings.TrimSpace(cfg.APIURL) == "" {
+		return fmt.Errorf("bootstrap requires --api-url")
+	}
+	if strings.TrimSpace(cfg.EnrollmentToken) == "" {
+		return fmt.Errorf("bootstrap requires --bootstrap-token")
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfg.ConfigFile) != "" {
+		if err := config.SaveFile(cfg.ConfigFile, cfg); err != nil {
+			return fmt.Errorf("write config file: %w", err)
+		}
+	}
+
+	client := api.NewClient(cfg.APIURL, cfg.RequestTimeout)
+	_, err = agent.RunBootstrapEnrollment(
+		ctx,
+		cfg,
+		client,
+		c.Logger,
+		c.Version,
+		c.stdoutOrDefault(),
+		cfg.EnrollmentToken,
+	)
+	return err
 }
 
 func (c CLI) Uninstall(ctx context.Context) error {
@@ -347,6 +452,9 @@ func (c CLI) setConfig(ctx context.Context, spec platformSpec, key, value string
 	if err := config.SaveFile(cfg.ConfigFile, cfg); err != nil {
 		return fmt.Errorf("write config file: %w", err)
 	}
+	if err := ensureOwnership(spec.ServiceUser, spec.ServiceGroup, cfg.ConfigFile); err != nil {
+		return err
+	}
 
 	_, _ = fmt.Fprintf(c.stdoutOrDefault(), "Updated %s in %s\n", key, cfg.ConfigFile)
 
@@ -385,6 +493,9 @@ func currentPlatformSpec() (platformSpec, error) {
 			WorkingDir:    linuxInstallDir,
 			RequiresRoot:  true,
 			ServiceDomain: "system",
+			ServiceUser:   linuxServiceUser,
+			ServiceGroup:  linuxServiceUser,
+			ServiceHome:   linuxServiceHome,
 		}, nil
 	case "darwin":
 		return platformSpec{
@@ -432,6 +543,57 @@ func serviceActionRequiresRoot(spec platformSpec, action string) bool {
 		return false
 	}
 	return true
+}
+
+func parseInstallOptions(args []string) (installOptions, error) {
+	var options installOptions
+
+	fs := flag.NewFlagSet("install", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&options.APIURL, "api-url", "", "")
+	fs.StringVar(&options.BootstrapToken, "bootstrap-token", "", "")
+	fs.StringVar(&options.LogLevel, "log-level", "", "")
+	fs.BoolVar(&options.NonInteractive, "non-interactive", false, "")
+
+	if err := fs.Parse(args); err != nil {
+		return installOptions{}, fmt.Errorf("parse install flags: %w", err)
+	}
+	if len(fs.Args()) > 0 {
+		return installOptions{}, fmt.Errorf("unexpected install arguments: %s", strings.Join(fs.Args(), " "))
+	}
+
+	return options, nil
+}
+
+func parseBootstrapOptions(args []string) (bootstrapOptions, error) {
+	var options bootstrapOptions
+
+	fs := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&options.APIURL, "api-url", "", "")
+	fs.StringVar(&options.BootstrapToken, "bootstrap-token", "", "")
+	fs.StringVar(&options.ConfigFile, "config-file", "", "")
+	fs.StringVar(&options.StateFile, "state-file", "", "")
+	fs.StringVar(&options.LogLevel, "log-level", "", "")
+	fs.BoolVar(&options.NonInteractive, "non-interactive", false, "")
+
+	if err := fs.Parse(args); err != nil {
+		return bootstrapOptions{}, fmt.Errorf("parse bootstrap flags: %w", err)
+	}
+	if len(fs.Args()) > 0 {
+		return bootstrapOptions{}, fmt.Errorf("unexpected bootstrap arguments: %s", strings.Join(fs.Args(), " "))
+	}
+
+	return options, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func applyConfigValue(cfg *config.Config, key, value string) error {
@@ -484,6 +646,17 @@ func managedConfigPath(spec platformSpec) string {
 }
 
 func renderServiceUnit(spec platformSpec, configPath string) string {
+	userSection := ""
+	if strings.TrimSpace(spec.ServiceUser) != "" {
+		userSection += fmt.Sprintf("User=%s\n", spec.ServiceUser)
+	}
+	if strings.TrimSpace(spec.ServiceGroup) != "" {
+		userSection += fmt.Sprintf("Group=%s\n", spec.ServiceGroup)
+	}
+	if strings.TrimSpace(spec.ServiceHome) != "" {
+		userSection += fmt.Sprintf("Environment=HOME=%s\n", spec.ServiceHome)
+	}
+
 	return fmt.Sprintf(`[Unit]
 Description=Noderax Agent
 After=network-online.target
@@ -492,14 +665,14 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%s
-Environment=NODERAX_CONFIG_FILE=%s
+%sEnvironment=NODERAX_CONFIG_FILE=%s
 ExecStart=%s
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-`, spec.WorkingDir, configPath, spec.BinaryPath)
+`, spec.WorkingDir, userSection, configPath, spec.BinaryPath)
 }
 
 func renderLaunchdPlist(spec platformSpec, configPath string) string {
@@ -849,6 +1022,50 @@ func writeServiceUnit(path, content string) error {
 	return nil
 }
 
+func ensureOwnership(ownerName, groupName, path string) error {
+	if os.Geteuid() != 0 || strings.TrimSpace(ownerName) == "" || strings.TrimSpace(path) == "" {
+		return nil
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+
+	owner, err := user.Lookup(ownerName)
+	if err != nil {
+		return fmt.Errorf("lookup user %s: %w", ownerName, err)
+	}
+	group, err := user.LookupGroup(firstNonEmpty(groupName, ownerName))
+	if err != nil {
+		return fmt.Errorf("lookup group %s: %w", firstNonEmpty(groupName, ownerName), err)
+	}
+
+	uid, err := strconv.Atoi(owner.Uid)
+	if err != nil {
+		return fmt.Errorf("parse uid for %s: %w", ownerName, err)
+	}
+	gid, err := strconv.Atoi(group.Gid)
+	if err != nil {
+		return fmt.Errorf("parse gid for %s: %w", groupName, err)
+	}
+
+	if err := os.Chown(path, uid, gid); err != nil {
+		return fmt.Errorf("chown %s: %w", path, err)
+	}
+	if info.IsDir() {
+		return nil
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("chmod %s: %w", path, err)
+	}
+
+	return nil
+}
+
 func requireRoot() error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("this command must be run as root; try again with sudo")
@@ -888,6 +1105,54 @@ func promptValue(reader *bufio.Reader, writer io.Writer, label, defaultValue str
 			return "", writeErr
 		}
 	}
+}
+
+func (c CLI) bootstrapManagedInstall(ctx context.Context, spec platformSpec, cfg config.Config) error {
+	if strings.TrimSpace(spec.ServiceUser) == "" {
+		client := api.NewClient(cfg.APIURL, cfg.RequestTimeout)
+		_, err := agent.RunBootstrapEnrollment(
+			ctx,
+			cfg,
+			client,
+			c.Logger,
+			c.Version,
+			c.stdoutOrDefault(),
+			cfg.EnrollmentToken,
+		)
+		return err
+	}
+
+	if err := ensureOwnership(spec.ServiceUser, spec.ServiceGroup, cfg.ConfigFile); err != nil {
+		return err
+	}
+
+	args := []string{
+		"-u",
+		spec.ServiceUser,
+		"-H",
+		spec.BinaryPath,
+		"bootstrap",
+		"--non-interactive",
+		"--api-url",
+		cfg.APIURL,
+		"--bootstrap-token",
+		cfg.EnrollmentToken,
+		"--config-file",
+		cfg.ConfigFile,
+		"--state-file",
+		cfg.StateFile,
+		"--log-level",
+		cfg.LogLevel,
+	}
+
+	cmd := exec.CommandContext(ctx, "sudo", args...)
+	cmd.Stdout = c.stdoutOrDefault()
+	cmd.Stderr = c.stderrOrDefault()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("bootstrap managed install: %w", err)
+	}
+
+	return nil
 }
 
 func (c CLI) stopAndDisableService(ctx context.Context, spec platformSpec) error {

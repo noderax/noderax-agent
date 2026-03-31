@@ -8,7 +8,10 @@ Noderax Agent is the Go-based node runtime for the platform. It enrolls a machin
 ## Highlights
 
 - Enrollment-based node onboarding with approval tokens
+- One-click bootstrap installer for Ubuntu and Debian
+- Workspace-generated bootstrap tokens for the `Add node` flow
 - Background service support for Linux-based systems
+- Dedicated `noderax` runtime user for the service and remote operations
 - Built-in CLI for install, start, stop, restart, status, and config updates
 - Realtime Socket.IO session for agent auth, metrics, and lifecycle signaling
 - HTTP long-poll task claiming as the primary execution path
@@ -22,32 +25,30 @@ Noderax Agent is the Go-based node runtime for the platform. It enrolls a machin
 
 ## Supported Platforms
 
-- Linux-based systems with `systemd` (Ubuntu, Debian, CentOS, RHEL, etc.)
+- Ubuntu and Debian hosts with `systemd`
 - Manual source-based execution on other developer environments
 
 ## Quick Install
 
-Prerequisites:
+The preferred onboarding path is from the web dashboard:
 
-- `git`
-- `go`
+1. Open `Nodes` for the target workspace.
+2. Choose `Add node`.
+3. Fill in node metadata in step 1.
+4. Copy the generated install command from step 2.
 
 ```bash
-git clone <repo-url> noderax-agent
-cd noderax-agent
-sudo ./scripts/install.sh
+curl -fsSL https://cdn.noderax.net/noderax-agent/install.sh | sudo bash -s -- --api-url https://api.example.com --bootstrap-token <token>
 ```
 
 The installer:
 
-- asks for the API URL
-- asks for the enrollment email
-- requests an enrollment token
-- waits for approval from the web UI
-- installs the agent as a background service
-- starts it automatically
-
-When you run the installer from a source checkout, it mirrors the entered values into repository-level `config.json` for local visibility. The managed service still reads its OS-specific config path.
+- checks and installs required packages
+- creates the `noderax` system user
+- grants passwordless `sudo` to `noderax`
+- downloads the correct prebuilt agent binary
+- bootstraps the node with the provided token
+- installs and starts the background service automatically
 
 ## Installed Paths
 
@@ -58,8 +59,16 @@ When you run the installer from a source checkout, it mirrors the entered values
 - Config: `/etc/noderax-agent/config.json`
 - State: `/var/lib/noderax-agent/agent_identity.json`
 - Service: `/etc/systemd/system/noderax-agent.service`
+- Runtime user: `noderax`
+- Sudoers: `/etc/sudoers.d/noderax-agent`
 
+## Non-Interactive Bootstrap From A Local Binary
 
+If you already have the binary on the target host, you can run the same bootstrap flow without the shell installer:
+
+```bash
+sudo ./noderax-agent install --non-interactive --api-url https://api.example.com --bootstrap-token <token>
+```
 
 ## Manual Installation
 
@@ -237,6 +246,8 @@ The agent executes `shell.exec` tasks in a controlled non-interactive environmen
 - `COLUMNS=100000`
 - graceful cancellation with log drain timeout
 - scheduled tasks use the same execution path as manually queued tasks
+- when installed through the bootstrap installer, tasks run under the `noderax` user
+- package operations can elevate through passwordless `sudo -n` provided to `noderax`
 
 For package listing on Debian/Ubuntu, the agent uses optimized `dpkg -l` parsing to return structured package metadata.
 

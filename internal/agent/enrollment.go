@@ -29,6 +29,10 @@ type enrollmentStatusClient interface {
 	GetEnrollment(context.Context, string) (api.EnrollmentStatusResponse, error)
 }
 
+type bootstrapEnrollmentClient interface {
+	ConsumeNodeInstall(context.Context, api.ConsumeNodeInstallRequest) (api.ConsumeNodeInstallResponse, error)
+}
+
 func RunInteractiveEnrollment(
 	ctx context.Context,
 	cfg config.Config,
@@ -114,6 +118,71 @@ func RunInteractiveEnrollment(
 	return nil
 }
 
+func RunBootstrapEnrollment(
+	ctx context.Context,
+	cfg config.Config,
+	client bootstrapEnrollmentClient,
+	logger *slog.Logger,
+	version string,
+	output io.Writer,
+	token string,
+) (Identity, error) {
+	if output == nil {
+		output = io.Discard
+	}
+
+	store := NewIdentityStore(cfg.StateFile)
+	if identity, err := store.Load(); err == nil && identity.Ready() {
+		_, _ = fmt.Fprintf(output, "Agent is already enrolled with node ID %s.\n", identity.NodeID)
+		return identity, nil
+	} else if err != nil && !errors.Is(err, ErrIdentityNotFound) {
+		return Identity{}, err
+	}
+
+	hostInfo, err := system.HostInfo(ctx)
+	if err != nil && logger != nil {
+		logger.Warn("host info collection returned partial data", "error", err)
+	}
+
+	requestCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
+	defer cancel()
+
+	operatingSystem := hostInfo.Platform
+	if strings.TrimSpace(operatingSystem) == "" {
+		operatingSystem = hostInfo.OS
+	}
+
+	response, err := client.ConsumeNodeInstall(requestCtx, api.ConsumeNodeInstallRequest{
+		Token:    strings.TrimSpace(token),
+		Hostname: hostInfo.Hostname,
+		AdditionalInfo: api.EnrollmentAdditionalInfo{
+			OS:              operatingSystem,
+			Arch:            hostInfo.Architecture,
+			AgentVersion:    version,
+			PlatformVersion: hostInfo.PlatformVersion,
+			KernelVersion:   hostInfo.KernelVersion,
+		},
+	})
+	if err != nil {
+		return Identity{}, fmt.Errorf("consume bootstrap install: %w", err)
+	}
+	if strings.TrimSpace(response.NodeID) == "" || strings.TrimSpace(response.AgentToken) == "" {
+		return Identity{}, fmt.Errorf("consume bootstrap install: API returned incomplete node credentials")
+	}
+
+	identity := Identity{
+		NodeID:       response.NodeID,
+		AgentToken:   response.AgentToken,
+		RegisteredAt: time.Now().UTC(),
+	}
+	if err := persistIdentity(cfg, store, identity, logger); err != nil {
+		return Identity{}, err
+	}
+
+	_, _ = fmt.Fprintf(output, "Bootstrap completed. Node ID: %s\n", identity.NodeID)
+	return identity, nil
+}
+
 func completeEnrollment(
 	ctx context.Context,
 	cfg config.Config,
@@ -136,18 +205,7 @@ func completeEnrollment(
 		return Identity{}, err
 	}
 
-	if err := store.Save(identity); err != nil {
-		return Identity{}, fmt.Errorf("persist identity: %w", err)
-	}
-
-	if strings.TrimSpace(cfg.ConfigFile) != "" {
-		cfg.EnrollmentToken = ""
-		if err := config.SaveFile(cfg.ConfigFile, cfg); err != nil && logger != nil {
-			logger.Warn("failed to clear enrollment token from config", "path", cfg.ConfigFile, "error", err)
-		}
-	}
-
-	return identity, nil
+	return identity, persistIdentity(cfg, store, identity, logger)
 }
 
 func waitForEnrollmentApproval(
@@ -236,6 +294,33 @@ func configPathForWrite(cfg config.Config) string {
 		return cfg.ConfigFile
 	}
 	return "./config.json"
+}
+
+func persistIdentity(
+	cfg config.Config,
+	store *IdentityStore,
+	identity Identity,
+	logger *slog.Logger,
+) error {
+	if err := store.Save(identity); err != nil {
+		return fmt.Errorf("persist identity: %w", err)
+	}
+
+	if strings.TrimSpace(cfg.ConfigFile) == "" {
+		return nil
+	}
+
+	cfg.EnrollmentToken = ""
+	cfg.NodeID = identity.NodeID
+	cfg.AgentToken = identity.AgentToken
+	if err := config.SaveFile(cfg.ConfigFile, cfg); err != nil {
+		if logger != nil {
+			logger.Warn("failed to persist identity to config", "path", cfg.ConfigFile, "error", err)
+		}
+		return nil
+	}
+
+	return nil
 }
 
 func promptValue(reader *bufio.Reader, output io.Writer, label string, required bool) (string, error) {
