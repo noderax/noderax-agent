@@ -1,18 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVICE_USER="${NODERAX_AGENT_SERVICE_USER:-noderax}"
-SERVICE_HOME="${NODERAX_AGENT_SERVICE_HOME:-/var/lib/noderax-agent}"
-INSTALL_DIR="${NODERAX_AGENT_INSTALL_DIR:-/opt/noderax-agent}"
-CONFIG_DIR="${NODERAX_AGENT_CONFIG_DIR:-/etc/noderax-agent}"
-STATE_DIR="${NODERAX_AGENT_STATE_DIR:-/var/lib/noderax-agent}"
-DOWNLOAD_BASE_URL="${NODERAX_AGENT_DOWNLOAD_BASE_URL:-https://cdn.noderax.net/noderax-agent/releases}"
-VERSION="${NODERAX_AGENT_VERSION:-latest}"
-LOG_LEVEL="${NODERAX_AGENT_LOG_LEVEL:-info}"
+normalize_value() {
+  local value="${1:-}"
+
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+
+  if [[ "${value}" == \"*\" && "${value}" == *\" ]]; then
+    value="${value:1:${#value}-2}"
+  elif [[ "${value}" == \'*\' && "${value}" == *\' ]]; then
+    value="${value:1:${#value}-2}"
+  fi
+
+  printf '%s' "${value}"
+}
+
+SERVICE_USER="$(normalize_value "${NODERAX_AGENT_SERVICE_USER:-noderax}")"
+SERVICE_HOME="$(normalize_value "${NODERAX_AGENT_SERVICE_HOME:-/var/lib/noderax-agent}")"
+INSTALL_DIR="$(normalize_value "${NODERAX_AGENT_INSTALL_DIR:-/opt/noderax-agent}")"
+CONFIG_DIR="$(normalize_value "${NODERAX_AGENT_CONFIG_DIR:-/etc/noderax-agent}")"
+STATE_DIR="$(normalize_value "${NODERAX_AGENT_STATE_DIR:-/var/lib/noderax-agent}")"
+DOWNLOAD_BASE_URL="$(normalize_value "${NODERAX_AGENT_DOWNLOAD_BASE_URL:-https://cdn.noderax.net/noderax-agent/releases}")"
+VERSION="$(normalize_value "${NODERAX_AGENT_VERSION:-latest}")"
+LOG_LEVEL="$(normalize_value "${NODERAX_AGENT_LOG_LEVEL:-info}")"
 
 API_URL=""
 BOOTSTRAP_TOKEN=""
-BINARY_URL="${NODERAX_AGENT_BINARY_URL:-}"
+BINARY_URL="$(normalize_value "${NODERAX_AGENT_BINARY_URL:-}")"
 
 usage() {
   cat <<'EOF'
@@ -24,22 +39,27 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --api-url)
       API_URL="${2:-}"
+      API_URL="$(normalize_value "${API_URL}")"
       shift 2
       ;;
     --bootstrap-token)
       BOOTSTRAP_TOKEN="${2:-}"
+      BOOTSTRAP_TOKEN="$(normalize_value "${BOOTSTRAP_TOKEN}")"
       shift 2
       ;;
     --log-level)
       LOG_LEVEL="${2:-}"
+      LOG_LEVEL="$(normalize_value "${LOG_LEVEL}")"
       shift 2
       ;;
     --version)
       VERSION="${2:-}"
+      VERSION="$(normalize_value "${VERSION}")"
       shift 2
       ;;
     --binary-url)
       BINARY_URL="${2:-}"
+      BINARY_URL="$(normalize_value "${BINARY_URL}")"
       shift 2
       ;;
     -h|--help)
@@ -151,10 +171,17 @@ if [[ -z "${BINARY_URL}" ]]; then
   BINARY_URL="${DOWNLOAD_BASE_URL}/${VERSION}/noderax-agent-linux-${ARCH}"
 fi
 
+if [[ ! "${BINARY_URL}" =~ ^https?://[^[:space:]]+$ ]]; then
+  echo "Computed agent binary URL is invalid: ${BINARY_URL}" >&2
+  echo "Check NODERAX_AGENT_BINARY_URL, NODERAX_AGENT_DOWNLOAD_BASE_URL, and NODERAX_AGENT_VERSION." >&2
+  exit 1
+fi
+
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 TMP_BINARY="${TMP_DIR}/noderax-agent"
 
+echo "Downloading Noderax Agent binary from ${BINARY_URL}"
 curl -fsSL "${BINARY_URL}" -o "${TMP_BINARY}"
 chmod 0755 "${TMP_BINARY}"
 
