@@ -3,7 +3,6 @@ package tasks
 import (
 	"context"
 	"encoding/json"
-	"os/exec"
 	"sync"
 	"testing"
 	"time"
@@ -49,16 +48,14 @@ func (m *mockRealtimeEvents) TaskCompleted(ctx context.Context, req api.Complete
 func (m *mockRealtimeEvents) ReportLogDrop()           {}
 func (m *mockRealtimeEvents) ReportDispatchHandled()   {}
 
-// Custom command runner for testing that fakes dpkg/apt output
-type mockCommandRunner struct {
-	execCommandRunner
-}
-
 func newMockExecCommandRunner(ctx context.Context, name string, args ...string) commandRunner {
 	if name == "dpkg" || name == "apt" || name == "apt-get" {
-		// Mock out apt/dpkg using echo to spit out dummy payload
-		mockCmd := exec.CommandContext(ctx, "echo", "ii bash 5.2.21 amd64 GNU Bourne Again SHell")
-		return &mockCommandRunner{execCommandRunner{cmd: mockCmd}}
+		return newHelperCommandRunner(
+			ctx,
+			"ii  bash           5.2.21-2ubuntu amd64        GNU Bourne Again SHell\n",
+			"",
+			0,
+		)
 	}
 	return newExecCommandRunner(ctx, name, args...)
 }
