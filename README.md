@@ -10,6 +10,7 @@ Noderax Agent is the Go-based node runtime for the platform. It enrolls a machin
 - Enrollment-based node onboarding with approval tokens
 - One-click bootstrap installer for Ubuntu and Debian
 - Workspace-generated bootstrap tokens for the `Add node` flow
+- Installer-side live progress reporting back to the control plane during bootstrap
 - Background service support for Linux-based systems
 - Dedicated `noderax` runtime user for the service and remote operations
 - Built-in CLI for install, start, stop, restart, status, and config updates
@@ -48,7 +49,25 @@ The installer:
 - grants passwordless `sudo` to `noderax`
 - downloads the correct prebuilt agent binary
 - bootstraps the node with the provided token
+- reports bootstrap progress back to the API so the web `Add node` modal can update live
 - installs and starts the background service automatically
+
+## One-Click Install Progress Stages
+
+The bootstrap installer reports stage changes back to `POST /api/v1/node-installs/progress` while it runs.
+
+Common stages:
+
+- `installer_started`
+- `dependencies_installing`
+- `dependencies_ready`
+- `service_user_ready`
+- `binary_download_started`
+- `binary_downloaded`
+- `agent_bootstrapping`
+- `service_started`
+
+If any step fails, the installer reports `failed` so the web UI can stop waiting and show the error state.
 
 ## R2 Release Automation
 
@@ -71,22 +90,22 @@ Required GitHub secrets:
 - `R2_SECRET_ACCESS_KEY`
 - `R2_BUCKET`
 
-`R2_BUCKET` plain bucket name olmalı. URL veya custom domain verme.
+`R2_BUCKET` must be the plain bucket name only. Do not use a URL or custom domain.
 
-Doğru örnek:
+Correct example:
 
 - `R2_BUCKET=noderax-assets`
 
-Yanlış örnekler:
+Incorrect examples:
 
 - `R2_BUCKET=https://cdn.noderax.net`
 - `R2_BUCKET=https://<accountid>.r2.cloudflarestorage.com/noderax-assets`
 
-Workflow publish öncesi bucket varlığını da kontrol eder. `NoSuchBucket` alırsan genelde şu üç sebepten biridir:
+The workflow checks bucket existence before publishing. If you get `NoSuchBucket`, the most common reasons are:
 
-- `R2_BUCKET` değeri gerçek bucket adı değildir
-- `R2_ACCOUNT_ID` farklı bir Cloudflare hesabına aittir
-- access key çifti bucket’ın bulunduğu hesaba ait değildir
+- `R2_BUCKET` is not the real bucket name
+- `R2_ACCOUNT_ID` belongs to a different Cloudflare account
+- the access key pair belongs to a different account than the bucket
 
 Trigger behavior:
 
@@ -283,6 +302,7 @@ Implementation notes:
 - The terminal session environment sets `TERM=xterm-256color` and `PAGER=cat`
 - Output is chunked and flushed on a timer so the web console receives live updates without waiting for more keystrokes
 - On constrained hosts, fallback PTY modes may log reduced job-control capability while remaining usable
+- `terminal.stop` requests a remote shell shutdown, and the API applies a timeout fallback if the shell disappears without a final clean exit event
 
 ## Task Execution Environment
 
@@ -292,7 +312,7 @@ The agent executes `shell.exec` tasks in a controlled non-interactive environmen
 - `COLUMNS=100000`
 - graceful cancellation with log drain timeout
 - scheduled tasks use the same execution path as manually queued tasks
-- when installed through the bootstrap installer, tasks run under the `noderax` user
+- when installed through the bootstrap installer, shell and package tasks run under the `noderax` user
 - package operations can elevate through passwordless `sudo -n` provided to `noderax`
 
 For package listing on Debian/Ubuntu, the agent uses optimized `dpkg -l` parsing to return structured package metadata.
