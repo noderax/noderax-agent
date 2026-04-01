@@ -24,6 +24,7 @@ const (
 	releaseManifestAssetName      = "release-manifest.json"
 	updateProgressRequestTimeout  = 10 * time.Second
 	updateDownloadTimeout         = 10 * time.Minute
+	updateServiceReadyTimeout     = 30 * time.Second
 )
 
 type updateOptions struct {
@@ -284,6 +285,10 @@ func (c CLI) applyManagedUpdate(
 			restartErr,
 			restartMessage,
 		)
+	}
+
+	if err := waitForRestartedService(ctx, spec.ServiceName); err != nil {
+		return err
 	}
 
 	report(
@@ -566,4 +571,72 @@ func sanitizeSystemdUnitComponent(value string) string {
 		return cleaned[:48]
 	}
 	return cleaned
+}
+
+func waitForRestartedService(ctx context.Context, serviceName string) error {
+	deadline := time.Now().Add(updateServiceReadyTimeout)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		cmd := exec.CommandContext(
+			checkCtx,
+			"systemctl",
+			"is-active",
+			"--quiet",
+			serviceName,
+		)
+		err := cmd.Run()
+		cancel()
+		if err == nil {
+			return nil
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf(
+				"service %s did not become active after restart: %s",
+				serviceName,
+				readServiceFailureDetail(ctx, serviceName),
+			)
+		}
+
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func readServiceFailureDetail(ctx context.Context, serviceName string) string {
+	statusCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(
+		statusCtx,
+		"journalctl",
+		"-u",
+		serviceName,
+		"-n",
+		"25",
+		"--no-pager",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			return fmt.Sprintf("unable to read journal: %v", err)
+		}
+		return fmt.Sprintf("unable to read journal: %v: %s", err, message)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[len(lines)-1]) == "" {
+		return "journal did not return any recent entries"
+	}
+
+	const maxLines = 5
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+
+	return strings.Join(lines, " | ")
 }
