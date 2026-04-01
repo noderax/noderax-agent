@@ -15,7 +15,13 @@ Formatting rules:
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-04-02
+
 ### Added
+- One-click bootstrap installer for Ubuntu and Debian hosts.
+- Background service management, telemetry, task polling, and package
+  operations for enrolled nodes.
+- Interactive terminal support over the agent realtime channel.
 - Platform-wide `Updates` center for official agent release visibility, rollout
   selection, and changelog browsing.
 - Sequential fleet rollouts with retry, skip, resume, cancel, rollback, and
@@ -24,16 +30,6 @@ Formatting rules:
   official CDN metadata with GitHub Releases fallback.
 
 ### Security
+- Dedicated `noderax` runtime user with least-privilege task execution defaults.
 - Self-update sudo access is restricted to the dedicated `noderax-agent update`
   command instead of generic root shell execution.
-
-## [1.0.0] - 2026-03-01
-
-### Added
-- One-click bootstrap installer for Ubuntu and Debian hosts.
-- Background service management, telemetry, task polling, and package
-  operations for enrolled nodes.
-- Interactive terminal support over the agent realtime channel.
-
-### Security
-- Dedicated `noderax` runtime user with least-privilege task execution defaults.
