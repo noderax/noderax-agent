@@ -48,7 +48,7 @@ The installer:
 - checks and installs required packages
 - creates the `noderax` system user
 - grants passwordless `sudo` only for `apt-get install/remove/purge`
-- grants passwordless `sudo` to the dedicated `noderax-agent update` command used by fleet rollouts
+- grants passwordless `sudo` to the dedicated `/usr/local/libexec/noderax-agent-self-update` helper used by fleet rollouts
 - downloads the correct prebuilt agent binary
 - bootstraps the node with the provided token
 - reports bootstrap progress back to the API so the web `Add node` modal can update live
@@ -204,10 +204,10 @@ sudo noderax-agent status
 ## Fleet Self-Update
 
 Platform-admin fleet rollouts do not use `shell.exec`. They dispatch the dedicated
-`agent.update` task type, which hands off to the root-only CLI command below:
+`agent.update` task type, which hands off to the root-only helper below:
 
 ```bash
-sudo noderax-agent update --target-version 1.0.1 --target-id <rollout-target-id>
+sudo /usr/local/libexec/noderax-agent-self-update --target-version 1.0.1 --target-id <rollout-target-id>
 ```
 
 The managed updater:
@@ -345,7 +345,7 @@ The agent executes `shell.exec` tasks in a controlled non-interactive environmen
 - when installed through the bootstrap installer, shell and package tasks run under the `noderax` user
 - `shell.exec` does not auto-elevate to root; it runs in the `noderax` user context by default
 - package operations can elevate through passwordless `sudo -n`, but only for `apt-get install`, `apt-get remove`, and `apt-get purge`
-- agent self-update can elevate through passwordless `sudo -n`, but only for the dedicated `noderax-agent update` command
+- agent self-update can elevate through passwordless `sudo -n`, but only for the dedicated `/usr/local/libexec/noderax-agent-self-update` helper
 - ad-hoc root shell commands are intentionally out of scope for the bundled sudoers profile
 
 For package listing on Debian/Ubuntu, the agent uses optimized `dpkg -l` parsing to return structured package metadata.

@@ -26,6 +26,8 @@ const (
 	TaskTypePackageInstall = "packageInstall"
 	TaskTypePackageRemove  = "packageRemove"
 	TaskTypePackagePurge   = "packagePurge"
+
+	linuxPrivilegedUpdateHelperPath = "/usr/local/libexec/noderax-agent-self-update"
 )
 
 var (
@@ -127,6 +129,7 @@ type ShellExecutor struct {
 	goos           string
 	lookPath       func(string) (string, error)
 	executablePath func() (string, error)
+	fileExists     func(string) bool
 	newCommand     func(context.Context, string, ...string) commandRunner
 }
 
@@ -136,7 +139,11 @@ func NewShellExecutor(defaultTimeout time.Duration) *ShellExecutor {
 		goos:           runtime.GOOS,
 		lookPath:       exec.LookPath,
 		executablePath: os.Executable,
-		newCommand:     newExecCommandRunner,
+		fileExists: func(path string) bool {
+			_, err := os.Stat(path)
+			return err == nil
+		},
+		newCommand: newExecCommandRunner,
 	}
 }
 
@@ -325,6 +332,40 @@ func (e *ShellExecutor) agentUpdateCommand(payload json.RawMessage) (commandSpec
 	}
 	if parsed.Rollback {
 		args = append(args, "--rollback")
+	}
+
+	if e.goos == "linux" && e.fileExists(linuxPrivilegedUpdateHelperPath) {
+		helperArgs := []string{
+			"--target-version",
+			targetVersion,
+			"--target-id",
+			targetID,
+		}
+		if parsed.Rollback {
+			helperArgs = append(helperArgs, "--rollback")
+		}
+
+		commandName, commandArgs, err := e.wrapWithSudo(
+			linuxPrivilegedUpdateHelperPath,
+			helperArgs,
+		)
+		if err != nil {
+			return commandSpec{}, err
+		}
+
+		return commandSpec{
+			name:         commandName,
+			args:         commandArgs,
+			startMessage: fmt.Sprintf("handing off agent update to %s", targetVersion),
+			parseResult: func(string, func(string, string)) any {
+				return map[string]any{
+					"status":        "handoff",
+					"targetId":      targetID,
+					"targetVersion": targetVersion,
+					"rollback":      parsed.Rollback,
+				}
+			},
+		}, nil
 	}
 
 	commandName, commandArgs, err := e.wrapWithSudo(agentPath, args)

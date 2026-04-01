@@ -92,6 +92,7 @@ func TestShellExecutorExecuteBuildsExpectedCommands(t *testing.T) {
 		task            api.Task
 		goos            string
 		lookPathResults map[string]string
+		helperExists    bool
 		wantName        string
 		wantArgs        []string
 		wantDir         string
@@ -113,6 +114,28 @@ func TestShellExecutorExecuteBuildsExpectedCommands(t *testing.T) {
 			wantArgs: []string{"-lc", "echo hello"},
 			wantDir:  "/tmp/work",
 			wantEnv:  map[string]string{"FOO": "bar"},
+		},
+		{
+			name: "agent update prefers dedicated helper when installed",
+			task: api.Task{
+				Type:    TaskTypeAgentUpdate,
+				Payload: mustJSON(t, agentUpdatePayload{TargetVersion: "1.0.0", TargetID: "target-1"}),
+			},
+			goos: "linux",
+			lookPathResults: map[string]string{
+				"noderax-agent": "/usr/local/bin/noderax-agent",
+				"sudo":          "/usr/bin/sudo",
+			},
+			helperExists: true,
+			wantName:     "/usr/bin/sudo",
+			wantArgs: []string{
+				"-n",
+				linuxPrivilegedUpdateHelperPath,
+				"--target-version",
+				"1.0.0",
+				"--target-id",
+				"target-1",
+			},
 		},
 		{
 			name: "package list prefers dpkg",
@@ -192,6 +215,9 @@ func TestShellExecutorExecuteBuildsExpectedCommands(t *testing.T) {
 			executor := NewShellExecutor(5 * time.Minute)
 			executor.goos = tt.goos
 			executor.lookPath = fakeLookPath(tt.lookPathResults)
+			executor.fileExists = func(path string) bool {
+				return tt.helperExists && path == linuxPrivilegedUpdateHelperPath
+			}
 
 			recorder := &recordingCommandFactory{
 				runner: &fakeCommandRunner{
@@ -228,7 +254,7 @@ func TestShellExecutorExecuteBuildsExpectedCommands(t *testing.T) {
 					t.Fatalf("expected env %s=%s in %v", key, value, recorder.runner.env)
 				}
 			}
-			if !containsLog(logs, "system:running ") {
+			if !containsLog(logs, "system:running ") && !containsLog(logs, "system:handing off agent update to ") {
 				t.Fatalf("expected system start log, got %v", logs)
 			}
 			if !containsLog(logs, "stdout:line 1") {

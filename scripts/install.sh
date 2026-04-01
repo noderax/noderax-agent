@@ -254,10 +254,11 @@ report_progress \
 SUDOERS_FILE="/etc/sudoers.d/noderax-agent"
 APT_GET_PATH="$(command -v apt-get)"
 MANAGED_BINARY_PATH="${INSTALL_DIR}/noderax-agent"
+UPDATE_HELPER_PATH="/usr/local/libexec/noderax-agent-self-update"
 cat > "${SUDOERS_FILE}" <<EOF
 # Managed by the Noderax agent installer.
 Cmnd_Alias NODERAX_AGENT_PACKAGE_MUTATIONS = ${APT_GET_PATH} install -y -- *, ${APT_GET_PATH} remove -y -- *, ${APT_GET_PATH} purge -y -- *
-Cmnd_Alias NODERAX_AGENT_SELF_UPDATE = ${SYMLINK_PATH} update *, ${MANAGED_BINARY_PATH} update *
+Cmnd_Alias NODERAX_AGENT_SELF_UPDATE = ${UPDATE_HELPER_PATH}
 ${SERVICE_USER} ALL=(root) NOPASSWD: NODERAX_AGENT_PACKAGE_MUTATIONS, NODERAX_AGENT_SELF_UPDATE
 EOF
 chmod 0440 "${SUDOERS_FILE}"

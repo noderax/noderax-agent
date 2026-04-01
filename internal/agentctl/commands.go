@@ -27,15 +27,16 @@ const (
 	serviceManagerSystemd = "systemd"
 	serviceManagerLaunchd = "launchd"
 
-	linuxInstallDir  = "/opt/noderax-agent"
-	linuxBinaryPath  = linuxInstallDir + "/noderax-agent"
-	linuxSymlinkPath = "/usr/local/bin/noderax-agent"
-	linuxConfigPath  = "/etc/noderax-agent/config.json"
-	linuxStatePath   = "/var/lib/noderax-agent/agent_identity.json"
-	linuxServiceUnit = "/etc/systemd/system/noderax-agent.service"
-	linuxServiceName = "noderax-agent.service"
-	linuxServiceUser = "noderax"
-	linuxServiceHome = "/var/lib/noderax-agent"
+	linuxInstallDir                 = "/opt/noderax-agent"
+	linuxBinaryPath                 = linuxInstallDir + "/noderax-agent"
+	linuxSymlinkPath                = "/usr/local/bin/noderax-agent"
+	linuxPrivilegedUpdateHelperPath = "/usr/local/libexec/noderax-agent-self-update"
+	linuxConfigPath                 = "/etc/noderax-agent/config.json"
+	linuxStatePath                  = "/var/lib/noderax-agent/agent_identity.json"
+	linuxServiceUnit                = "/etc/systemd/system/noderax-agent.service"
+	linuxServiceName                = "noderax-agent.service"
+	linuxServiceUser                = "noderax"
+	linuxServiceHome                = "/var/lib/noderax-agent"
 
 	macOSInstallDir  = "/usr/local/lib/noderax-agent"
 	macOSBinaryPath  = macOSInstallDir + "/noderax-agent"
@@ -47,22 +48,23 @@ const (
 )
 
 type platformSpec struct {
-	Manager       string
-	InstallDir    string
-	BinaryPath    string
-	SymlinkPath   string
-	ConfigPath    string
-	StatePath     string
-	ServiceUnit   string
-	ServiceName   string
-	WorkingDir    string
-	RequiresRoot  bool
-	ServiceDomain string
-	LogStdoutPath string
-	LogStderrPath string
-	ServiceUser   string
-	ServiceGroup  string
-	ServiceHome   string
+	Manager                    string
+	InstallDir                 string
+	BinaryPath                 string
+	SymlinkPath                string
+	PrivilegedUpdateHelperPath string
+	ConfigPath                 string
+	StatePath                  string
+	ServiceUnit                string
+	ServiceName                string
+	WorkingDir                 string
+	RequiresRoot               bool
+	ServiceDomain              string
+	LogStdoutPath              string
+	LogStderrPath              string
+	ServiceUser                string
+	ServiceGroup               string
+	ServiceHome                string
 }
 
 type installOptions struct {
@@ -205,6 +207,9 @@ func (c CLI) Install(ctx context.Context, args []string) error {
 			return fmt.Errorf("create symlink: %w", err)
 		}
 	}
+	if err := writePrivilegedUpdateHelper(spec); err != nil {
+		return fmt.Errorf("write privileged update helper: %w", err)
+	}
 
 	switch spec.Manager {
 	case serviceManagerSystemd:
@@ -338,6 +343,18 @@ func (c CLI) Uninstall(ctx context.Context) error {
 		return err
 	}
 	recordRemovalResult(&removed, &missing, "symlink", spec.SymlinkPath, symlinkRemoved)
+
+	helperRemoved, err := removeFileIfExists(spec.PrivilegedUpdateHelperPath)
+	if err != nil {
+		return err
+	}
+	recordRemovalResult(
+		&removed,
+		&missing,
+		"privileged update helper",
+		spec.PrivilegedUpdateHelperPath,
+		helperRemoved,
+	)
 
 	configRemoved, err := removeFileIfExists(configPath)
 	if err != nil {
@@ -485,36 +502,38 @@ func currentPlatformSpec() (platformSpec, error) {
 	switch runtime.GOOS {
 	case "linux":
 		return platformSpec{
-			Manager:       serviceManagerSystemd,
-			InstallDir:    linuxInstallDir,
-			BinaryPath:    linuxBinaryPath,
-			SymlinkPath:   linuxSymlinkPath,
-			ConfigPath:    linuxConfigPath,
-			StatePath:     linuxStatePath,
-			ServiceUnit:   linuxServiceUnit,
-			ServiceName:   linuxServiceName,
-			WorkingDir:    linuxInstallDir,
-			RequiresRoot:  true,
-			ServiceDomain: "system",
-			ServiceUser:   linuxServiceUser,
-			ServiceGroup:  linuxServiceUser,
-			ServiceHome:   linuxServiceHome,
+			Manager:                    serviceManagerSystemd,
+			InstallDir:                 linuxInstallDir,
+			BinaryPath:                 linuxBinaryPath,
+			SymlinkPath:                linuxSymlinkPath,
+			PrivilegedUpdateHelperPath: linuxPrivilegedUpdateHelperPath,
+			ConfigPath:                 linuxConfigPath,
+			StatePath:                  linuxStatePath,
+			ServiceUnit:                linuxServiceUnit,
+			ServiceName:                linuxServiceName,
+			WorkingDir:                 linuxInstallDir,
+			RequiresRoot:               true,
+			ServiceDomain:              "system",
+			ServiceUser:                linuxServiceUser,
+			ServiceGroup:               linuxServiceUser,
+			ServiceHome:                linuxServiceHome,
 		}, nil
 	case "darwin":
 		return platformSpec{
-			Manager:       serviceManagerLaunchd,
-			InstallDir:    macOSInstallDir,
-			BinaryPath:    macOSBinaryPath,
-			SymlinkPath:   macOSSymlinkPath,
-			ConfigPath:    macOSConfigPath,
-			StatePath:     macOSStatePath,
-			ServiceUnit:   macOSServiceUnit,
-			ServiceName:   macOSServiceName,
-			WorkingDir:    macOSInstallDir,
-			RequiresRoot:  true,
-			ServiceDomain: "system",
-			LogStdoutPath: "/var/log/noderax-agent.log",
-			LogStderrPath: "/var/log/noderax-agent.error.log",
+			Manager:                    serviceManagerLaunchd,
+			InstallDir:                 macOSInstallDir,
+			BinaryPath:                 macOSBinaryPath,
+			SymlinkPath:                macOSSymlinkPath,
+			PrivilegedUpdateHelperPath: "",
+			ConfigPath:                 macOSConfigPath,
+			StatePath:                  macOSStatePath,
+			ServiceUnit:                macOSServiceUnit,
+			ServiceName:                macOSServiceName,
+			WorkingDir:                 macOSInstallDir,
+			RequiresRoot:               true,
+			ServiceDomain:              "system",
+			LogStdoutPath:              "/var/log/noderax-agent.log",
+			LogStderrPath:              "/var/log/noderax-agent.error.log",
 		}, nil
 	default:
 		return platformSpec{}, fmt.Errorf("unsupported platform %s", runtime.GOOS)
@@ -1016,6 +1035,53 @@ func ensureSymlink(target, link string) error {
 	}
 
 	return nil
+}
+
+func writePrivilegedUpdateHelper(spec platformSpec) error {
+	path := strings.TrimSpace(spec.PrivilegedUpdateHelperPath)
+	if path == "" {
+		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create helper directory for %s: %w", path, err)
+	}
+
+	content := renderPrivilegedUpdateHelper(spec)
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		return fmt.Errorf("write helper %s: %w", path, err)
+	}
+
+	return nil
+}
+
+func renderPrivilegedUpdateHelper(spec platformSpec) string {
+	return fmt.Sprintf(`#!/bin/sh
+set -eu
+
+usage() {
+  echo "usage: %s --target-version <version> --target-id <target-id> [--rollback]" >&2
+  exit 64
+}
+
+if [ "$#" -ne 4 ] && [ "$#" -ne 5 ]; then
+  usage
+fi
+
+if [ "$1" != "--target-version" ] || [ -z "${2:-}" ] || [ "$3" != "--target-id" ] || [ -z "${4:-}" ]; then
+  usage
+fi
+
+if [ "$#" -eq 5 ] && [ "$5" != "--rollback" ]; then
+  usage
+fi
+
+if [ "$#" -eq 5 ]; then
+  exec %q update --target-version "$2" --target-id "$4" --rollback
+fi
+
+exec %q update --target-version "$2" --target-id "$4"
+`, spec.PrivilegedUpdateHelperPath, spec.BinaryPath, spec.BinaryPath)
 }
 
 func writeServiceUnit(path, content string) error {

@@ -44,3 +44,26 @@ func TestRenderInstallSummaryIncludesUsefulCommands(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderPrivilegedUpdateHelperTargetsManagedBinary(t *testing.T) {
+	t.Parallel()
+
+	spec := platformSpec{
+		BinaryPath:                 linuxBinaryPath,
+		PrivilegedUpdateHelperPath: linuxPrivilegedUpdateHelperPath,
+	}
+
+	script := renderPrivilegedUpdateHelper(spec)
+
+	expectedSnippets := []string{
+		"usage: " + linuxPrivilegedUpdateHelperPath,
+		"exec \"" + linuxBinaryPath + "\" update --target-version \"$2\" --target-id \"$4\" --rollback",
+		"exec \"" + linuxBinaryPath + "\" update --target-version \"$2\" --target-id \"$4\"",
+	}
+
+	for _, snippet := range expectedSnippets {
+		if !strings.Contains(script, snippet) {
+			t.Fatalf("helper script missing snippet %q\n%s", snippet, script)
+		}
+	}
+}
