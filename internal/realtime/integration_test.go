@@ -139,6 +139,7 @@ func TestRealtimeConnectAuthDispatchLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
+	svc.SetRuntimeAgentVersion("1.0.0")
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -149,6 +150,9 @@ func TestRealtimeConnectAuthDispatchLifecycle(t *testing.T) {
 	select {
 	case auth := <-authCh:
 		if auth.Type != EventAgentAuth || auth.NodeID != "node-1" || auth.AgentToken != "token-1" {
+			t.Fatalf("unexpected auth payload: %+v", auth)
+		}
+		if auth.AgentVersion != "1.0.0" {
 			t.Fatalf("unexpected auth payload: %+v", auth)
 		}
 	case <-time.After(8 * time.Second):

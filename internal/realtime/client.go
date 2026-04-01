@@ -44,18 +44,19 @@ type Stats struct {
 }
 
 type Service struct {
-	logger         *slog.Logger
-	requestTimeout time.Duration
-	pingInterval   time.Duration
-	jitterRatio    float64
-	credentials    func() (string, string)
-	dispatcher     *dispatcher
-	onAuthSuccess  AuthSuccessHook
-	dialURL        string
-	healthURL      string
-	namespace      string
-	path           string
-	outbound       chan any
+	logger              *slog.Logger
+	requestTimeout      time.Duration
+	pingInterval        time.Duration
+	jitterRatio         float64
+	credentials         func() (string, string)
+	dispatcher          *dispatcher
+	onAuthSuccess       AuthSuccessHook
+	dialURL             string
+	healthURL           string
+	namespace           string
+	path                string
+	runtimeAgentVersion string
+	outbound            chan any
 
 	reconnects      atomic.Int64
 	pingsSent       atomic.Int64
@@ -352,6 +353,7 @@ func (s *Service) SendMetrics(ctx context.Context, event api.MetricsRequest) err
 		Type:         EventAgentMetrics,
 		NodeID:       event.NodeID,
 		AgentToken:   event.AgentToken,
+		AgentVersion: s.runtimeAgentVersion,
 		Timestamp:    formatTimestampUTCMillis(event.CollectedAt),
 		CPUUsage:     &cpuUsage,
 		MemoryUsage:  &memoryUsage,
@@ -372,6 +374,10 @@ func (s *Service) ReportLogDrop() {
 
 func (s *Service) ReportDispatchHandled() {
 	s.dispatchHandled.Add(1)
+}
+
+func (s *Service) SetRuntimeAgentVersion(version string) {
+	s.runtimeAgentVersion = strings.TrimSpace(version)
 }
 
 func (s *Service) SnapshotStats() Stats {
@@ -512,7 +518,12 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 	}
 
 	socket.OnConnect(func() {
-		authPayload := authEvent{Type: EventAgentAuth, NodeID: nodeID, AgentToken: agentToken}
+		authPayload := authEvent{
+			Type:         EventAgentAuth,
+			NodeID:       nodeID,
+			AgentToken:   agentToken,
+			AgentVersion: s.runtimeAgentVersion,
+		}
 		socket.Emit(EventAgentAuth, authPayload)
 	})
 

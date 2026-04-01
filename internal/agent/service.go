@@ -13,8 +13,8 @@ import (
 	"github.com/noderax/noderax-agent/internal/config"
 	"github.com/noderax/noderax-agent/internal/metrics"
 	"github.com/noderax/noderax-agent/internal/realtime"
-	"github.com/noderax/noderax-agent/internal/terminal"
 	"github.com/noderax/noderax-agent/internal/tasks"
+	"github.com/noderax/noderax-agent/internal/terminal"
 )
 
 type Service struct {
@@ -147,6 +147,9 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 	)
 	if err != nil {
 		logger.Error("failed to initialize realtime service", "error", err)
+	}
+	if realtimeService != nil {
+		realtimeService.SetRuntimeAgentVersion(version)
 	}
 
 	var terminalEvents terminal.RealtimeEvents

@@ -10,12 +10,12 @@ import (
 )
 
 const (
-	EventAgentAuth    = "agent.auth"
-	EventAgentAuthAck = "agent.auth.ack"
-	EventAgentAuthErr = "agent.auth.error"
-	EventAgentError   = "agent.error"
-	EventAgentPing    = "agent.ping"
-	EventAgentMetrics = "agent.metrics"
+	EventAgentAuth      = "agent.auth"
+	EventAgentAuthAck   = "agent.auth.ack"
+	EventAgentAuthErr   = "agent.auth.error"
+	EventAgentError     = "agent.error"
+	EventAgentPing      = "agent.ping"
+	EventAgentMetrics   = "agent.metrics"
 	EventTerminalStart  = "terminal.start"
 	EventTerminalInput  = "terminal.input"
 	EventTerminalResize = "terminal.resize"
@@ -24,11 +24,11 @@ const (
 	EventTerminalOutput = "terminal.output"
 	EventTerminalExited = "terminal.exited"
 	EventTerminalError  = "terminal.error"
-	EventTaskDispatch = "task.dispatch"
-	EventTaskAccepted = "task.accepted"
-	EventTaskStarted  = "task.started"
-	EventTaskLog      = "task.log"
-	EventTaskComplete = "task.completed"
+	EventTaskDispatch   = "task.dispatch"
+	EventTaskAccepted   = "task.accepted"
+	EventTaskStarted    = "task.started"
+	EventTaskLog        = "task.log"
+	EventTaskComplete   = "task.completed"
 )
 
 type taskDispatcher interface {
@@ -128,9 +128,10 @@ func (d *dispatcher) handleMessage(ctx context.Context, data []byte) error {
 }
 
 type authEvent struct {
-	Type       string `json:"type"`
-	NodeID     string `json:"nodeId"`
-	AgentToken string `json:"agentToken"`
+	Type         string `json:"type"`
+	NodeID       string `json:"nodeId"`
+	AgentToken   string `json:"agentToken"`
+	AgentVersion string `json:"agentVersion,omitempty"`
 }
 
 type pingEvent struct {
@@ -142,6 +143,7 @@ type metricsEvent struct {
 	Type         string             `json:"type"`
 	NodeID       string             `json:"nodeId"`
 	AgentToken   string             `json:"agentToken"`
+	AgentVersion string             `json:"agentVersion,omitempty"`
 	Timestamp    string             `json:"timestamp"`
 	CPUUsage     *float64           `json:"cpuUsage,omitempty"`
 	MemoryUsage  *float64           `json:"memoryUsage,omitempty"`

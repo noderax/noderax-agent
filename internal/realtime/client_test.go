@@ -57,6 +57,7 @@ func TestSendMetricsUsesMillisecondTimestamp(t *testing.T) {
 
 	svc := &Service{outbound: make(chan any, 1), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	svc.sessionActive.Store(true)
+	svc.SetRuntimeAgentVersion("1.0.0")
 	collectedAt := time.Date(2026, 3, 20, 10, 20, 30, 456789123, time.UTC)
 
 	err := svc.SendMetrics(context.Background(), api.MetricsRequest{
@@ -81,6 +82,9 @@ func TestSendMetricsUsesMillisecondTimestamp(t *testing.T) {
 	}
 	if event.AgentToken != "token-1" {
 		t.Fatalf("unexpected agent token: %q", event.AgentToken)
+	}
+	if event.AgentVersion != "1.0.0" {
+		t.Fatalf("unexpected agent version: %q", event.AgentVersion)
 	}
 
 	pattern := regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`)
