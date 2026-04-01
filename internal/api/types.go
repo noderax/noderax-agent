@@ -170,6 +170,12 @@ type TaskControlResponse struct {
 	CancelReason      string     `json:"cancelReason,omitempty"`
 }
 
+type AgentUpdateProgressRequest struct {
+	Status          string `json:"status"`
+	ProgressPercent int    `json:"progressPercent"`
+	Message         string `json:"message,omitempty"`
+}
+
 type ErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`

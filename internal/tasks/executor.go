@@ -19,6 +19,7 @@ import (
 )
 
 const (
+	TaskTypeAgentUpdate    = "agent.update"
 	TaskTypeShellExec      = "shell.exec"
 	TaskTypePackageList    = "packageList"
 	TaskTypePackageSearch  = "packageSearch"
@@ -52,6 +53,12 @@ type packageMutationPayload struct {
 	Packages []string `json:"packages,omitempty"`
 	Names    []string `json:"names,omitempty"`
 	Purge    bool     `json:"purge,omitempty"`
+}
+
+type agentUpdatePayload struct {
+	TargetVersion string `json:"targetVersion"`
+	TargetID      string `json:"targetId"`
+	Rollback      bool   `json:"rollback,omitempty"`
 }
 
 type ExecutionResult struct {
@@ -119,6 +126,7 @@ type ShellExecutor struct {
 	defaultTimeout time.Duration
 	goos           string
 	lookPath       func(string) (string, error)
+	executablePath func() (string, error)
 	newCommand     func(context.Context, string, ...string) commandRunner
 }
 
@@ -127,6 +135,7 @@ func NewShellExecutor(defaultTimeout time.Duration) *ShellExecutor {
 		defaultTimeout: defaultTimeout,
 		goos:           runtime.GOOS,
 		lookPath:       exec.LookPath,
+		executablePath: os.Executable,
 		newCommand:     newExecCommandRunner,
 	}
 }
@@ -251,6 +260,8 @@ func (e *ShellExecutor) Execute(ctx context.Context, task api.Task, onLog func(s
 
 func (e *ShellExecutor) commandForTask(task api.Task) (commandSpec, error) {
 	switch task.Type {
+	case TaskTypeAgentUpdate:
+		return e.agentUpdateCommand(task.Payload)
 	case TaskTypeShellExec:
 		return e.shellCommand(task.Payload)
 	case TaskTypePackageList:
@@ -266,6 +277,74 @@ func (e *ShellExecutor) commandForTask(task api.Task) (commandSpec, error) {
 	default:
 		return commandSpec{}, fmt.Errorf("%w: %s", ErrUnsupportedTaskType, task.Type)
 	}
+}
+
+func (e *ShellExecutor) agentUpdateCommand(payload json.RawMessage) (commandSpec, error) {
+	if err := e.ensureLinuxTaskSupport(); err != nil {
+		return commandSpec{}, err
+	}
+
+	var parsed agentUpdatePayload
+	if err := decodePayload(payload, &parsed, TaskTypeAgentUpdate); err != nil {
+		return commandSpec{}, err
+	}
+
+	targetVersion := strings.TrimSpace(parsed.TargetVersion)
+	if targetVersion == "" {
+		return commandSpec{}, fmt.Errorf(
+			"%w: agent.update payload requires targetVersion",
+			ErrInvalidTaskPayload,
+		)
+	}
+
+	targetID := strings.TrimSpace(parsed.TargetID)
+	if targetID == "" {
+		return commandSpec{}, fmt.Errorf(
+			"%w: agent.update payload requires targetId",
+			ErrInvalidTaskPayload,
+		)
+	}
+
+	agentPath, err := e.lookPath("noderax-agent")
+	if err != nil {
+		agentPath, err = e.executablePath()
+		if err != nil {
+			return commandSpec{}, fmt.Errorf(
+				"%w: could not resolve the managed noderax-agent binary",
+				ErrUnsupportedExecutionEnvironment,
+			)
+		}
+	}
+
+	args := []string{
+		"update",
+		"--target-version",
+		targetVersion,
+		"--target-id",
+		targetID,
+	}
+	if parsed.Rollback {
+		args = append(args, "--rollback")
+	}
+
+	commandName, commandArgs, err := e.wrapWithSudo(agentPath, args)
+	if err != nil {
+		return commandSpec{}, err
+	}
+
+	return commandSpec{
+		name:         commandName,
+		args:         commandArgs,
+		startMessage: fmt.Sprintf("handing off agent update to %s", targetVersion),
+		parseResult: func(string, func(string, string)) any {
+			return map[string]any{
+				"status":        "handoff",
+				"targetId":      targetID,
+				"targetVersion": targetVersion,
+				"rollback":      parsed.Rollback,
+			}
+		},
+	}, nil
 }
 
 func (e *ShellExecutor) shellCommand(payload json.RawMessage) (commandSpec, error) {

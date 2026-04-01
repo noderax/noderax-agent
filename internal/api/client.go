@@ -139,6 +139,24 @@ func (c *Client) GetTaskControl(ctx context.Context, taskID string) (TaskControl
 	return response, nil
 }
 
+func (c *Client) ReportAgentUpdateProgress(
+	ctx context.Context,
+	targetID string,
+	request AgentUpdateProgressRequest,
+) error {
+	return c.post(
+		ctx,
+		apiPath(
+			fmt.Sprintf(
+				"/agent-updates/targets/%s/progress",
+				url.PathEscape(targetID),
+			),
+		),
+		request,
+		nil,
+	)
+}
+
 func (c *Client) post(ctx context.Context, path string, request any, result any) error {
 	apiErr := &ErrorResponse{}
 	req := c.http.R().

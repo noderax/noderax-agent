@@ -21,6 +21,7 @@ SERVICE_HOME="$(normalize_value "${NODERAX_AGENT_SERVICE_HOME:-/var/lib/noderax-
 INSTALL_DIR="$(normalize_value "${NODERAX_AGENT_INSTALL_DIR:-/opt/noderax-agent}")"
 CONFIG_DIR="$(normalize_value "${NODERAX_AGENT_CONFIG_DIR:-/etc/noderax-agent}")"
 STATE_DIR="$(normalize_value "${NODERAX_AGENT_STATE_DIR:-/var/lib/noderax-agent}")"
+SYMLINK_PATH="/usr/local/bin/noderax-agent"
 DOWNLOAD_BASE_URL="$(normalize_value "${NODERAX_AGENT_DOWNLOAD_BASE_URL:-https://cdn.noderax.net/noderax-agent/releases}")"
 AGENT_VERSION="$(normalize_value "${NODERAX_AGENT_VERSION:-latest}")"
 LOG_LEVEL="$(normalize_value "${NODERAX_AGENT_LOG_LEVEL:-info}")"
@@ -252,10 +253,12 @@ report_progress \
 
 SUDOERS_FILE="/etc/sudoers.d/noderax-agent"
 APT_GET_PATH="$(command -v apt-get)"
+MANAGED_BINARY_PATH="${INSTALL_DIR}/noderax-agent"
 cat > "${SUDOERS_FILE}" <<EOF
 # Managed by the Noderax agent installer.
 Cmnd_Alias NODERAX_AGENT_PACKAGE_MUTATIONS = ${APT_GET_PATH} install -y -- *, ${APT_GET_PATH} remove -y -- *, ${APT_GET_PATH} purge -y -- *
-${SERVICE_USER} ALL=(root) NOPASSWD: NODERAX_AGENT_PACKAGE_MUTATIONS
+Cmnd_Alias NODERAX_AGENT_SELF_UPDATE = ${SYMLINK_PATH} update *, ${MANAGED_BINARY_PATH} update *
+${SERVICE_USER} ALL=(root) NOPASSWD: NODERAX_AGENT_PACKAGE_MUTATIONS, NODERAX_AGENT_SELF_UPDATE
 EOF
 chmod 0440 "${SUDOERS_FILE}"
 if command -v visudo >/dev/null 2>&1; then

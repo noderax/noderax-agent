@@ -14,6 +14,7 @@ Noderax Agent is the Go-based node runtime for the platform. It enrolls a machin
 - Background service support for Linux-based systems
 - Dedicated `noderax` runtime user for the service and remote operations
 - Built-in CLI for install, start, stop, restart, status, and config updates
+- Detached self-update command for official tagged agent releases
 - Realtime Socket.IO session for agent auth, metrics, and lifecycle signaling
 - HTTP long-poll task claiming as the primary execution path
 - Interactive terminal session support over the agent realtime socket
@@ -47,6 +48,7 @@ The installer:
 - checks and installs required packages
 - creates the `noderax` system user
 - grants passwordless `sudo` only for `apt-get install/remove/purge`
+- grants passwordless `sudo` to the dedicated `noderax-agent update` command used by fleet rollouts
 - downloads the correct prebuilt agent binary
 - bootstraps the node with the provided token
 - reports bootstrap progress back to the API so the web `Add node` modal can update live
@@ -76,12 +78,14 @@ Agent release assets can be published to Cloudflare R2 automatically by the GitH
 Expected R2 object layout:
 
 - `noderax-agent/install.sh`
+- `noderax-agent/releases/catalog.json`
 - `noderax-agent/releases/latest/noderax-agent-linux-amd64`
 - `noderax-agent/releases/latest/noderax-agent-linux-arm64`
 - `noderax-agent/releases/latest/SHA256SUMS`
 - `noderax-agent/releases/<version>/noderax-agent-linux-amd64`
 - `noderax-agent/releases/<version>/noderax-agent-linux-arm64`
 - `noderax-agent/releases/<version>/SHA256SUMS`
+- `noderax-agent/releases/<version>/release-manifest.json`
 
 Required GitHub secrets:
 
@@ -110,10 +114,17 @@ The workflow checks bucket existence before publishing. If you get `NoSuchBucket
 Trigger behavior:
 
 - Pushes to `main` refresh `install.sh` and the `latest` binaries
-- Tags matching `agent-v*` publish a versioned channel and also refresh `latest`
-- Manual runs can publish any URL-safe release slug through `workflow_dispatch`
+- Tags matching `agent-v*` publish a versioned channel, `release-manifest.json`, and the shared `catalog.json`, then also refresh `latest`
+- Manual runs can republish an existing tagged version through `workflow_dispatch`
 
 The workflow builds Linux `amd64` and `arm64` binaries, injects version metadata into the Go binary, and uploads the artifacts directly to R2 through the S3-compatible endpoint.
+
+Official tagged release notes come from [`CHANGELOG.md`](./CHANGELOG.md). The release workflow turns that file into:
+
+- the versioned CDN `release-manifest.json`
+- the shared `releases/catalog.json`
+- the GitHub Release body
+- the GitHub Release `release-manifest.json` asset used by API fallback
 
 ## Installed Paths
 
@@ -190,6 +201,25 @@ sudo noderax-agent restart
 sudo noderax-agent status
 ```
 
+## Fleet Self-Update
+
+Platform-admin fleet rollouts do not use `shell.exec`. They dispatch the dedicated
+`agent.update` task type, which hands off to the root-only CLI command below:
+
+```bash
+sudo noderax-agent update --target-version 1.0.1 --target-id <rollout-target-id>
+```
+
+The managed updater:
+
+- fetches the official tagged release manifest from the CDN and falls back to the matching GitHub Release asset
+- selects the correct Linux `amd64` or `arm64` artifact
+- verifies the downloaded binary with `SHA256`
+- atomically replaces the managed binary and refreshes the symlink
+- reports progress back to the API
+- restarts `noderax-agent.service`
+- leaves final success confirmation to the next heartbeat, which must report the target version
+
 ## Configuration Management
 
 Show active config:
@@ -246,7 +276,7 @@ The agent realtime socket remains important for:
 - interactive terminal control and streaming
 - optional compatibility with API-side realtime task dispatch when explicitly enabled
 
-Fleet visibility uses heartbeat telemetry only. The current product surface does not include agent self-update orchestration inside the agent runtime; upgrades remain an external deployment concern.
+Fleet visibility also powers update completion. A fleet rollout only completes after heartbeat telemetry confirms that the restarted node is actually running the requested tagged agent version.
 
 ## Realtime Socket.IO v4
 
@@ -315,6 +345,7 @@ The agent executes `shell.exec` tasks in a controlled non-interactive environmen
 - when installed through the bootstrap installer, shell and package tasks run under the `noderax` user
 - `shell.exec` does not auto-elevate to root; it runs in the `noderax` user context by default
 - package operations can elevate through passwordless `sudo -n`, but only for `apt-get install`, `apt-get remove`, and `apt-get purge`
+- agent self-update can elevate through passwordless `sudo -n`, but only for the dedicated `noderax-agent update` command
 - ad-hoc root shell commands are intentionally out of scope for the bundled sudoers profile
 
 For package listing on Debian/Ubuntu, the agent uses optimized `dpkg -l` parsing to return structured package metadata.

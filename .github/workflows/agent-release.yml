@@ -8,6 +8,7 @@ on:
       - agent-v*
     paths:
       - .github/workflows/agent-release.yml
+      - CHANGELOG.md
       - cmd/**
       - internal/**
       - scripts/**
@@ -18,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       release_version:
-        description: Optional release slug such as 0.1.0
+        description: Optional existing tagged release version such as 0.1.0
         required: false
         type: string
       publish_latest:
@@ -32,7 +33,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   publish:
@@ -44,8 +45,11 @@ jobs:
       AWS_REGION: auto
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      PUBLIC_RELEASE_BASE_URL: https://cdn.noderax.net/noderax-agent/releases
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -86,6 +90,13 @@ jobs:
             exit 1
           fi
 
+          if [[ -n "${release_version}" ]]; then
+            if ! git rev-parse --verify "refs/tags/agent-v${release_version}" >/dev/null 2>&1; then
+              echo "Versioned releases must map to an existing git tag agent-v${release_version}." >&2
+              exit 1
+            fi
+          fi
+
           binary_version="${release_version}"
           if [[ -z "${binary_version}" ]]; then
             binary_version="main-${GITHUB_SHA::7}"
@@ -108,6 +119,36 @@ jobs:
             --commit "${GITHUB_SHA}" \
             --build-date "${{ steps.release.outputs.build_date }}" \
             --output-dir "./dist/release"
+
+      - name: Generate tagged release metadata
+        if: steps.release.outputs.release_version != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${{ steps.release.outputs.release_version }}"
+          download_base_url="${PUBLIC_RELEASE_BASE_URL}/${version}"
+
+          go run ./cmd/release-metadata bundle \
+            --version "${version}" \
+            --commit "${GITHUB_SHA}" \
+            --published-at "${{ steps.release.outputs.build_date }}" \
+            --artifacts-dir "./dist/release" \
+            --download-base-url "${download_base_url}" \
+            --manifest-output "./dist/release/release-manifest.json" \
+            --release-notes-output "./dist/release/release-notes.md" \
+            --changelog "./CHANGELOG.md"
+
+          if curl -fsSL "${PUBLIC_RELEASE_BASE_URL}/catalog.json" -o "./dist/release/catalog-existing.json"; then
+            echo "Loaded existing CDN catalog."
+          else
+            printf '{\"releases\":[]}\n' > "./dist/release/catalog-existing.json"
+          fi
+
+          go run ./cmd/release-metadata catalog \
+            --manifest "./dist/release/release-manifest.json" \
+            --existing "./dist/release/catalog-existing.json" \
+            --output "./dist/release/catalog.json"
 
       - name: Show release assets
         run: ls -lah ./dist/release
@@ -208,7 +249,7 @@ jobs:
             --cache-control "public, max-age=300" \
             --content-type "text/plain; charset=utf-8"
 
-      - name: Publish versioned channel
+      - name: Publish versioned release and catalog
         if: steps.release.outputs.release_version != ''
         shell: bash
         run: |
@@ -231,3 +272,27 @@ jobs:
             --endpoint-url "${endpoint}" \
             --cache-control "public, max-age=31536000, immutable" \
             --content-type "text/plain; charset=utf-8"
+
+          aws s3 cp ./dist/release/release-manifest.json "${bucket}/noderax-agent/releases/${version}/release-manifest.json" \
+            --endpoint-url "${endpoint}" \
+            --cache-control "public, max-age=31536000, immutable" \
+            --content-type "application/json; charset=utf-8"
+
+          aws s3 cp ./dist/release/catalog.json "${bucket}/noderax-agent/releases/catalog.json" \
+            --endpoint-url "${endpoint}" \
+            --cache-control "public, max-age=300" \
+            --content-type "application/json; charset=utf-8"
+
+      - name: Publish GitHub Release metadata
+        if: steps.release.outputs.release_version != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: agent-v${{ steps.release.outputs.release_version }}
+          name: Noderax Agent ${{ steps.release.outputs.release_version }}
+          body_path: ./dist/release/release-notes.md
+          fail_on_unmatched_files: true
+          files: |
+            ./dist/release/noderax-agent-linux-amd64
+            ./dist/release/noderax-agent-linux-arm64
+            ./dist/release/SHA256SUMS
+            ./dist/release/release-manifest.json

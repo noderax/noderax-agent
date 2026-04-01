@@ -106,6 +106,9 @@ func (c CLI) Handle(ctx context.Context, args []string) (bool, error) {
 	case "start", "stop", "restart", "status":
 		brand.PrintLogo(c.stdoutOrDefault())
 		return true, c.ServiceAction(ctx, args[0])
+	case "update":
+		brand.PrintLogo(c.stdoutOrDefault())
+		return true, c.Update(ctx, args[1:])
 	case "config":
 		brand.PrintLogo(c.stdoutOrDefault())
 		return true, c.Config(ctx, args[1:])
@@ -734,8 +737,9 @@ func renderInstallSummary(spec platformSpec, cfg config.Config, version, localCo
 	fmt.Fprintf(&builder, "  stop    %s\n", serviceCommandForSummary("stop"))
 	fmt.Fprintf(&builder, "  restart %s\n", serviceCommandForSummary("restart"))
 	fmt.Fprintf(&builder, "  status  %s\n", serviceCommandForSummary("status"))
-	fmt.Fprintf(&builder, "  config  %s\n", configShowCommandForSummary())
-	fmt.Fprintf(&builder, "  update  %s\n", configSetCommandForSummary())
+	fmt.Fprintf(&builder, "  config-show %s\n", configShowCommandForSummary())
+	fmt.Fprintf(&builder, "  config-set  %s\n", configSetCommandForSummary())
+	fmt.Fprintf(&builder, "  update      %s\n", agentUpdateCommandForSummary())
 	fmt.Fprintf(&builder, "  remove  %s\n", uninstallCommandForSummary())
 
 	builder.WriteString("\n")
@@ -808,6 +812,10 @@ func configSetCommandForSummary() string {
 
 func uninstallCommandForSummary() string {
 	return "sudo noderax-agent uninstall"
+}
+
+func agentUpdateCommandForSummary() string {
+	return "sudo noderax-agent update --target-version 1.2.3 --target-id <rollout-target-id>"
 }
 
 func logHintForSummary(spec platformSpec) string {
