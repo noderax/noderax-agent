@@ -251,7 +251,12 @@ report_progress \
   "Preparing the noderax service account and runtime directories."
 
 SUDOERS_FILE="/etc/sudoers.d/noderax-agent"
-printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${SERVICE_USER}" > "${SUDOERS_FILE}"
+APT_GET_PATH="$(command -v apt-get)"
+cat > "${SUDOERS_FILE}" <<EOF
+# Managed by the Noderax agent installer.
+Cmnd_Alias NODERAX_AGENT_PACKAGE_MUTATIONS = ${APT_GET_PATH} install -y -- *, ${APT_GET_PATH} remove -y -- *, ${APT_GET_PATH} purge -y -- *
+${SERVICE_USER} ALL=(root) NOPASSWD: NODERAX_AGENT_PACKAGE_MUTATIONS
+EOF
 chmod 0440 "${SUDOERS_FILE}"
 if command -v visudo >/dev/null 2>&1; then
   visudo -cf "${SUDOERS_FILE}" >/dev/null

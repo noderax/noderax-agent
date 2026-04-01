@@ -46,7 +46,7 @@ The installer:
 
 - checks and installs required packages
 - creates the `noderax` system user
-- grants passwordless `sudo` to `noderax`
+- grants passwordless `sudo` only for `apt-get install/remove/purge`
 - downloads the correct prebuilt agent binary
 - bootstraps the node with the provided token
 - reports bootstrap progress back to the API so the web `Add node` modal can update live
@@ -313,7 +313,9 @@ The agent executes `shell.exec` tasks in a controlled non-interactive environmen
 - graceful cancellation with log drain timeout
 - scheduled tasks use the same execution path as manually queued tasks
 - when installed through the bootstrap installer, shell and package tasks run under the `noderax` user
-- package operations can elevate through passwordless `sudo -n` provided to `noderax`
+- `shell.exec` does not auto-elevate to root; it runs in the `noderax` user context by default
+- package operations can elevate through passwordless `sudo -n`, but only for `apt-get install`, `apt-get remove`, and `apt-get purge`
+- ad-hoc root shell commands are intentionally out of scope for the bundled sudoers profile
 
 For package listing on Debian/Ubuntu, the agent uses optimized `dpkg -l` parsing to return structured package metadata.
 
@@ -328,6 +330,15 @@ For package listing on Debian/Ubuntu, the agent uses optimized `dpkg -l` parsing
 - [`internal/realtime`](internal/realtime): Socket.IO client and handlers
 - [`internal/system`](internal/system): host and system information helpers
 - [`scripts`](scripts): installation entrypoints
+
+## Verification
+
+Recommended checks:
+
+```bash
+go test ./...
+go vet ./...
+```
 
 ## Development
 
