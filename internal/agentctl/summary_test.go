@@ -31,6 +31,7 @@ func TestRenderInstallSummaryIncludesUsefulCommands(t *testing.T) {
 		"Local config : /workspace/config.json",
 		"start   sudo noderax-agent start",
 		"status  sudo noderax-agent status",
+		"version noderax-agent version",
 		"config-show sudo noderax-agent config show",
 		"config-set  sudo noderax-agent config set api_url https://api.example.com",
 		"update      sudo noderax-agent update --target-version 1.2.3 --target-id <rollout-target-id>",

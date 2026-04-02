@@ -140,6 +140,63 @@ func TestHandlePrintsLogoForManagedCommands(t *testing.T) {
 	}
 }
 
+func TestHandleVersionCommandPrintsBuildMetadata(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	cli := CLI{
+		Version:   "1.0.2",
+		Commit:    "abc1234",
+		BuildDate: "2026-04-02T10:30:00Z",
+		Stdout:    &stdout,
+		Stderr:    &stdout,
+	}
+
+	handled, err := cli.Handle(context.Background(), []string{"version"})
+	if !handled {
+		t.Fatal("expected version command to be handled")
+	}
+	if err != nil {
+		t.Fatalf("version command returned error: %v", err)
+	}
+
+	output := stdout.String()
+	for _, snippet := range []string{
+		"Noderax Agent",
+		"Version    : 1.0.2",
+		"Commit     : abc1234",
+		"Build date : 2026-04-02T10:30:00Z",
+	} {
+		if !strings.Contains(output, snippet) {
+			t.Fatalf("expected output to contain %q, got %q", snippet, output)
+		}
+	}
+}
+
+func TestHandleVersionFlagPrintsBuildMetadata(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	cli := CLI{
+		Version:   "1.0.2",
+		Commit:    "abc1234",
+		BuildDate: "2026-04-02T10:30:00Z",
+		Stdout:    &stdout,
+		Stderr:    &stdout,
+	}
+
+	handled, err := cli.Handle(context.Background(), []string{"--version"})
+	if !handled {
+		t.Fatal("expected --version to be handled")
+	}
+	if err != nil {
+		t.Fatalf("--version returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Version    : 1.0.2") {
+		t.Fatalf("expected version output, got %q", stdout.String())
+	}
+}
+
 func writeTempServiceDefinition(t *testing.T, content string) string {
 	t.Helper()
 

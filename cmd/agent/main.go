@@ -24,11 +24,13 @@ var (
 func main() {
 	baseLog := logger.New("info")
 	cli := agentctl.CLI{
-		Logger:  baseLog,
-		Version: version,
-		Stdin:   os.Stdin,
-		Stdout:  os.Stdout,
-		Stderr:  os.Stderr,
+		Logger:    baseLog,
+		Version:   version,
+		Commit:    commit,
+		BuildDate: buildDate,
+		Stdin:     os.Stdin,
+		Stdout:    os.Stdout,
+		Stderr:    os.Stderr,
 	}
 
 	cliCtx, cliStop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

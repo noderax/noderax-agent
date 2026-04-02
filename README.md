@@ -199,6 +199,8 @@ sudo noderax-agent start
 sudo noderax-agent stop
 sudo noderax-agent restart
 sudo noderax-agent status
+noderax-agent version
+noderax-agent --version
 ```
 
 ## Fleet Self-Update

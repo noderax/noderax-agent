@@ -15,6 +15,9 @@ Formatting rules:
 
 ## [Unreleased]
 
+### Added
+- Added `noderax-agent version` and `noderax-agent --version` output so operators can quickly verify the running build metadata during fleet update tests.
+
 ## [1.0.1] - 2026-04-02
 
 ### Fixed

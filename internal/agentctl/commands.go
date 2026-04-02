@@ -85,11 +85,13 @@ type bootstrapOptions struct {
 }
 
 type CLI struct {
-	Logger  *slog.Logger
-	Version string
-	Stdin   io.Reader
-	Stdout  io.Writer
-	Stderr  io.Writer
+	Logger    *slog.Logger
+	Version   string
+	Commit    string
+	BuildDate string
+	Stdin     io.Reader
+	Stdout    io.Writer
+	Stderr    io.Writer
 }
 
 func (c CLI) Handle(ctx context.Context, args []string) (bool, error) {
@@ -115,9 +117,23 @@ func (c CLI) Handle(ctx context.Context, args []string) (bool, error) {
 	case "config":
 		brand.PrintLogo(c.stdoutOrDefault())
 		return true, c.Config(ctx, args[1:])
+	case "version", "--version", "-v":
+		return true, c.VersionInfo(args[1:])
 	default:
 		return false, nil
 	}
+}
+
+func (c CLI) VersionInfo(args []string) error {
+	if len(args) > 0 {
+		return fmt.Errorf("unexpected version arguments: %s", strings.Join(args, " "))
+	}
+
+	_, _ = fmt.Fprint(
+		c.stdoutOrDefault(),
+		renderVersionSummary(c.Version, c.Commit, c.BuildDate),
+	)
+	return nil
 }
 
 func (c CLI) Install(ctx context.Context, args []string) error {
@@ -757,6 +773,7 @@ func renderInstallSummary(spec platformSpec, cfg config.Config, version, localCo
 	fmt.Fprintf(&builder, "  stop    %s\n", serviceCommandForSummary("stop"))
 	fmt.Fprintf(&builder, "  restart %s\n", serviceCommandForSummary("restart"))
 	fmt.Fprintf(&builder, "  status  %s\n", serviceCommandForSummary("status"))
+	fmt.Fprintf(&builder, "  version %s\n", versionCommandForSummary())
 	fmt.Fprintf(&builder, "  config-show %s\n", configShowCommandForSummary())
 	fmt.Fprintf(&builder, "  config-set  %s\n", configSetCommandForSummary())
 	fmt.Fprintf(&builder, "  update      %s\n", agentUpdateCommandForSummary())
@@ -766,6 +783,17 @@ func renderInstallSummary(spec platformSpec, cfg config.Config, version, localCo
 	builder.WriteString("Notes\n")
 	builder.WriteString("  The service was started automatically during install.\n")
 	builder.WriteString("  Use the commands above whenever you want to manage it again.\n")
+
+	return builder.String()
+}
+
+func renderVersionSummary(version, commit, buildDate string) string {
+	var builder strings.Builder
+
+	builder.WriteString("Noderax Agent\n")
+	fmt.Fprintf(&builder, "Version    : %s\n", firstNonEmpty(strings.TrimSpace(version), "unknown"))
+	fmt.Fprintf(&builder, "Commit     : %s\n", firstNonEmpty(strings.TrimSpace(commit), "unknown"))
+	fmt.Fprintf(&builder, "Build date : %s\n", firstNonEmpty(strings.TrimSpace(buildDate), "unknown"))
 
 	return builder.String()
 }
@@ -824,6 +852,10 @@ func serviceCommandForSummary(action string) string {
 
 func configShowCommandForSummary() string {
 	return "sudo noderax-agent config show"
+}
+
+func versionCommandForSummary() string {
+	return "noderax-agent version"
 }
 
 func configSetCommandForSummary() string {
