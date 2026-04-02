@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"runtime"
 	"strings"
@@ -27,7 +28,8 @@ const (
 	TaskTypePackageRemove  = "packageRemove"
 	TaskTypePackagePurge   = "packagePurge"
 
-	linuxPrivilegedUpdateHelperPath = "/usr/local/libexec/noderax-agent-self-update"
+	linuxPrivilegedUpdateHelperPath  = "/usr/local/libexec/noderax-agent-self-update"
+	linuxPrivilegedUpdateRequestPath = "/var/lib/noderax-agent/update-request.json"
 )
 
 var (
@@ -125,12 +127,13 @@ func (r *execCommandRunner) Wait() error {
 }
 
 type ShellExecutor struct {
-	defaultTimeout time.Duration
-	goos           string
-	lookPath       func(string) (string, error)
-	executablePath func() (string, error)
-	fileExists     func(string) bool
-	newCommand     func(context.Context, string, ...string) commandRunner
+	defaultTimeout              time.Duration
+	goos                        string
+	lookPath                    func(string) (string, error)
+	executablePath              func() (string, error)
+	fileExists                  func(string) bool
+	privilegedUpdateRequestPath string
+	newCommand                  func(context.Context, string, ...string) commandRunner
 }
 
 func NewShellExecutor(defaultTimeout time.Duration) *ShellExecutor {
@@ -143,7 +146,8 @@ func NewShellExecutor(defaultTimeout time.Duration) *ShellExecutor {
 			_, err := os.Stat(path)
 			return err == nil
 		},
-		newCommand: newExecCommandRunner,
+		privilegedUpdateRequestPath: linuxPrivilegedUpdateRequestPath,
+		newCommand:                  newExecCommandRunner,
 	}
 }
 
@@ -335,19 +339,17 @@ func (e *ShellExecutor) agentUpdateCommand(payload json.RawMessage) (commandSpec
 	}
 
 	if e.goos == "linux" && e.fileExists(linuxPrivilegedUpdateHelperPath) {
-		helperArgs := []string{
-			"--target-version",
-			targetVersion,
-			"--target-id",
-			targetID,
-		}
-		if parsed.Rollback {
-			helperArgs = append(helperArgs, "--rollback")
+		if err := writeManagedUpdateRequest(e.privilegedUpdateRequestPath, parsed); err != nil {
+			return commandSpec{}, fmt.Errorf(
+				"%w: write privileged update request: %v",
+				ErrUnsupportedExecutionEnvironment,
+				err,
+			)
 		}
 
 		commandName, commandArgs, err := e.wrapWithSudo(
 			linuxPrivilegedUpdateHelperPath,
-			helperArgs,
+			nil,
 		)
 		if err != nil {
 			return commandSpec{}, err
@@ -687,6 +689,47 @@ func formatCommandForLog(name string, args []string) string {
 	}
 
 	return strings.Join(parts, " ")
+}
+
+func writeManagedUpdateRequest(path string, payload agentUpdatePayload) error {
+	cleanPath := filepath.Clean(strings.TrimSpace(path))
+	if cleanPath == "" {
+		return fmt.Errorf("request path is empty")
+	}
+
+	if err := os.MkdirAll(filepath.Dir(cleanPath), 0o755); err != nil {
+		return fmt.Errorf("create update request directory: %w", err)
+	}
+
+	file, err := os.CreateTemp(filepath.Dir(cleanPath), ".noderax-agent-update-request-*.json")
+	if err != nil {
+		return fmt.Errorf("create update request file: %w", err)
+	}
+
+	tempPath := file.Name()
+	encoder := json.NewEncoder(file)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(payload); err != nil {
+		file.Close()
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("write update request file: %w", err)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		file.Close()
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("chmod update request file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("close update request file: %w", err)
+	}
+
+	if err := os.Rename(tempPath, cleanPath); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("replace update request file: %w", err)
+	}
+
+	return nil
 }
 
 func strconvQuote(value string) string {

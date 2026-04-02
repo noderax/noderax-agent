@@ -88,15 +88,16 @@ func TestShellExecutorExecuteBuildsExpectedCommands(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name            string
-		task            api.Task
-		goos            string
-		lookPathResults map[string]string
-		helperExists    bool
-		wantName        string
-		wantArgs        []string
-		wantDir         string
-		wantEnv         map[string]string
+		name                string
+		task                api.Task
+		goos                string
+		lookPathResults     map[string]string
+		helperExists        bool
+		expectUpdateRequest *agentUpdatePayload
+		wantName            string
+		wantArgs            []string
+		wantDir             string
+		wantEnv             map[string]string
 	}{
 		{
 			name: "shell exec keeps shell integration",
@@ -127,14 +128,14 @@ func TestShellExecutorExecuteBuildsExpectedCommands(t *testing.T) {
 				"sudo":          "/usr/bin/sudo",
 			},
 			helperExists: true,
-			wantName:     "/usr/bin/sudo",
+			expectUpdateRequest: &agentUpdatePayload{
+				TargetVersion: "1.0.0",
+				TargetID:      "target-1",
+			},
+			wantName: "/usr/bin/sudo",
 			wantArgs: []string{
 				"-n",
 				linuxPrivilegedUpdateHelperPath,
-				"--target-version",
-				"1.0.0",
-				"--target-id",
-				"target-1",
 			},
 		},
 		{
@@ -215,6 +216,8 @@ func TestShellExecutorExecuteBuildsExpectedCommands(t *testing.T) {
 			executor := NewShellExecutor(5 * time.Minute)
 			executor.goos = tt.goos
 			executor.lookPath = fakeLookPath(tt.lookPathResults)
+			requestPath := t.TempDir() + "/update-request.json"
+			executor.privilegedUpdateRequestPath = requestPath
 			executor.fileExists = func(path string) bool {
 				return tt.helperExists && path == linuxPrivilegedUpdateHelperPath
 			}
@@ -245,6 +248,19 @@ func TestShellExecutorExecuteBuildsExpectedCommands(t *testing.T) {
 			}
 			if !reflect.DeepEqual(recorder.args, tt.wantArgs) {
 				t.Fatalf("command args mismatch: got %v want %v", recorder.args, tt.wantArgs)
+			}
+			if tt.expectUpdateRequest != nil {
+				data, err := os.ReadFile(requestPath)
+				if err != nil {
+					t.Fatalf("read update request: %v", err)
+				}
+				var got agentUpdatePayload
+				if err := json.Unmarshal(data, &got); err != nil {
+					t.Fatalf("decode update request: %v", err)
+				}
+				if !reflect.DeepEqual(&got, tt.expectUpdateRequest) {
+					t.Fatalf("update request mismatch: got %+v want %+v", got, *tt.expectUpdateRequest)
+				}
 			}
 			if recorder.runner.dir != tt.wantDir {
 				t.Fatalf("working dir mismatch: got %q want %q", recorder.runner.dir, tt.wantDir)

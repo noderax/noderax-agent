@@ -27,16 +27,17 @@ const (
 	serviceManagerSystemd = "systemd"
 	serviceManagerLaunchd = "launchd"
 
-	linuxInstallDir                 = "/opt/noderax-agent"
-	linuxBinaryPath                 = linuxInstallDir + "/noderax-agent"
-	linuxSymlinkPath                = "/usr/local/bin/noderax-agent"
-	linuxPrivilegedUpdateHelperPath = "/usr/local/libexec/noderax-agent-self-update"
-	linuxConfigPath                 = "/etc/noderax-agent/config.json"
-	linuxStatePath                  = "/var/lib/noderax-agent/agent_identity.json"
-	linuxServiceUnit                = "/etc/systemd/system/noderax-agent.service"
-	linuxServiceName                = "noderax-agent.service"
-	linuxServiceUser                = "noderax"
-	linuxServiceHome                = "/var/lib/noderax-agent"
+	linuxInstallDir                  = "/opt/noderax-agent"
+	linuxBinaryPath                  = linuxInstallDir + "/noderax-agent"
+	linuxSymlinkPath                 = "/usr/local/bin/noderax-agent"
+	linuxPrivilegedUpdateHelperPath  = "/usr/local/libexec/noderax-agent-self-update"
+	linuxPrivilegedUpdateRequestPath = linuxServiceHome + "/update-request.json"
+	linuxConfigPath                  = "/etc/noderax-agent/config.json"
+	linuxStatePath                   = "/var/lib/noderax-agent/agent_identity.json"
+	linuxServiceUnit                 = "/etc/systemd/system/noderax-agent.service"
+	linuxServiceName                 = "noderax-agent.service"
+	linuxServiceUser                 = "noderax"
+	linuxServiceHome                 = "/var/lib/noderax-agent"
 
 	macOSInstallDir  = "/usr/local/lib/noderax-agent"
 	macOSBinaryPath  = macOSInstallDir + "/noderax-agent"
@@ -1059,29 +1060,13 @@ func renderPrivilegedUpdateHelper(spec platformSpec) string {
 	return fmt.Sprintf(`#!/bin/sh
 set -eu
 
-usage() {
-  echo "usage: %s --target-version <version> --target-id <target-id> [--rollback]" >&2
+if [ "$#" -ne 0 ]; then
+  echo "usage: %s" >&2
   exit 64
-}
-
-if [ "$#" -ne 4 ] && [ "$#" -ne 5 ]; then
-  usage
 fi
 
-if [ "$1" != "--target-version" ] || [ -z "${2:-}" ] || [ "$3" != "--target-id" ] || [ -z "${4:-}" ]; then
-  usage
-fi
-
-if [ "$#" -eq 5 ] && [ "$5" != "--rollback" ]; then
-  usage
-fi
-
-if [ "$#" -eq 5 ]; then
-  exec %q update --target-version "$2" --target-id "$4" --rollback
-fi
-
-exec %q update --target-version "$2" --target-id "$4"
-`, spec.PrivilegedUpdateHelperPath, spec.BinaryPath, spec.BinaryPath)
+exec %q update --request-file %q
+`, spec.PrivilegedUpdateHelperPath, spec.BinaryPath, linuxPrivilegedUpdateRequestPath)
 }
 
 func writeServiceUnit(path, content string) error {

@@ -30,6 +30,7 @@ const (
 type updateOptions struct {
 	TargetVersion string
 	TargetID      string
+	RequestFile   string
 	Rollback      bool
 	ApplyNow      bool
 }
@@ -108,6 +109,7 @@ func parseUpdateOptions(args []string) (updateOptions, error) {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&options.TargetVersion, "target-version", "", "")
 	fs.StringVar(&options.TargetID, "target-id", "", "")
+	fs.StringVar(&options.RequestFile, "request-file", "", "")
 	fs.BoolVar(&options.Rollback, "rollback", false, "")
 	fs.BoolVar(&options.ApplyNow, "apply-now", false, "")
 
@@ -120,15 +122,60 @@ func parseUpdateOptions(args []string) (updateOptions, error) {
 			strings.Join(fs.Args(), " "),
 		)
 	}
-	if strings.TrimSpace(options.TargetVersion) == "" {
+	options.TargetVersion = strings.TrimSpace(options.TargetVersion)
+	options.TargetID = strings.TrimSpace(options.TargetID)
+	options.RequestFile = strings.TrimSpace(options.RequestFile)
+
+	if options.RequestFile != "" {
+		if options.TargetVersion != "" || options.TargetID != "" || options.Rollback {
+			return updateOptions{}, fmt.Errorf(
+				"update request-file cannot be combined with --target-version, --target-id, or --rollback",
+			)
+		}
+
+		requestOptions, err := consumeManagedUpdateRequest(options.RequestFile)
+		if err != nil {
+			return updateOptions{}, err
+		}
+		requestOptions.ApplyNow = options.ApplyNow
+		return requestOptions, nil
+	}
+
+	if options.TargetVersion == "" {
 		return updateOptions{}, fmt.Errorf("update requires --target-version")
 	}
-	if strings.TrimSpace(options.TargetID) == "" {
+	if options.TargetID == "" {
 		return updateOptions{}, fmt.Errorf("update requires --target-id")
+	}
+
+	return options, nil
+}
+
+func consumeManagedUpdateRequest(path string) (updateOptions, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return updateOptions{}, fmt.Errorf("read update request file %s: %w", path, err)
+	}
+	if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
+		return updateOptions{}, fmt.Errorf("remove update request file %s: %w", path, removeErr)
+	}
+
+	var options updateOptions
+	if err := json.Unmarshal(data, &options); err != nil {
+		return updateOptions{}, fmt.Errorf("decode update request file %s: %w", path, err)
 	}
 
 	options.TargetVersion = strings.TrimSpace(options.TargetVersion)
 	options.TargetID = strings.TrimSpace(options.TargetID)
+	options.RequestFile = ""
+	options.ApplyNow = false
+
+	if options.TargetVersion == "" {
+		return updateOptions{}, fmt.Errorf("update request file %s is missing targetVersion", path)
+	}
+	if options.TargetID == "" {
+		return updateOptions{}, fmt.Errorf("update request file %s is missing targetId", path)
+	}
 
 	return options, nil
 }
@@ -265,6 +312,9 @@ func (c CLI) applyManagedUpdate(
 		if err := ensureSymlink(spec.BinaryPath, spec.SymlinkPath); err != nil {
 			return err
 		}
+	}
+	if err := writePrivilegedUpdateHelper(spec); err != nil {
+		return fmt.Errorf("refresh privileged update helper: %w", err)
 	}
 
 	report(

@@ -57,8 +57,7 @@ func TestRenderPrivilegedUpdateHelperTargetsManagedBinary(t *testing.T) {
 
 	expectedSnippets := []string{
 		"usage: " + linuxPrivilegedUpdateHelperPath,
-		"exec \"" + linuxBinaryPath + "\" update --target-version \"$2\" --target-id \"$4\" --rollback",
-		"exec \"" + linuxBinaryPath + "\" update --target-version \"$2\" --target-id \"$4\"",
+		"exec \"" + linuxBinaryPath + "\" update --request-file \"" + linuxPrivilegedUpdateRequestPath + "\"",
 	}
 
 	for _, snippet := range expectedSnippets {
