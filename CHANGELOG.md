@@ -15,8 +15,11 @@ Formatting rules:
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-04-02
+
 ### Fixed
-- Fleet self-update now uses a dedicated privileged helper so rollout handoff works on hosts that ship `sudo-rs`, where sudoers wildcard argument matching is more restrictive than classic `sudo`.
+- Fleet self-update now hands off through a request-file based privileged helper so rollout updates work on hosts that ship `sudo-rs`, where sudoers wildcard argument matching is more restrictive than classic `sudo`.
+- Managed self-update now refreshes the installed privileged helper during binary replacement so later rollouts keep using the corrected handoff path.
 
 ## [1.0.0] - 2026-04-02
 
