@@ -1215,11 +1215,20 @@ exec %q update --request-file %q
 }
 
 func renderBaseSudoers(spec platformSpec) string {
+	rootProfileHelperPath := spec.RootProfileHelperPath
+	rootProfileCommands := strings.Join([]string{
+		rootProfileHelperPath + " apply off",
+		rootProfileHelperPath + " apply operational",
+		rootProfileHelperPath + " apply task",
+		rootProfileHelperPath + " apply terminal",
+		rootProfileHelperPath + " apply all",
+	}, ", ")
+
 	return fmt.Sprintf(`# Managed by the Noderax agent installer.
 Cmnd_Alias NODERAX_AGENT_SELF_UPDATE = %s
-Cmnd_Alias NODERAX_AGENT_ROOT_PROFILE = %s apply *
+Cmnd_Alias NODERAX_AGENT_ROOT_PROFILE = %s
 %s ALL=(root) NOPASSWD: NODERAX_AGENT_SELF_UPDATE, NODERAX_AGENT_ROOT_PROFILE
-`, spec.PrivilegedUpdateHelperPath, spec.RootProfileHelperPath, spec.ServiceUser)
+`, spec.PrivilegedUpdateHelperPath, rootProfileCommands, spec.ServiceUser)
 }
 
 func renderRootProfileHelper(spec platformSpec) string {

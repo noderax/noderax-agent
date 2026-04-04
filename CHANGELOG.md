@@ -15,23 +15,14 @@ Formatting rules:
 
 ## [Unreleased]
 
-## [1.0.6] - 2026-04-04
-
-### Fixed
-
-- Realtime `agent.auth` now includes `platformVersion` and `kernelVersion`, allowing the control plane to refresh node platform/kernel metadata even when nodes rely on realtime reconnects instead of enrollment refresh.
-
-## [1.0.5] - 2026-04-04
-
-### Fixed
-
-- Managed self-update now refreshes the Linux root-profile helper and base sudoers file during binary replacement, preventing nodes from getting stuck with `root profile helper is not installed` after an update.
-
 ## [1.0.4] - 2026-04-04
 
 ### Fixed
 
 - Interactive enrollment now includes `platformVersion` and `kernelVersion` in `additionalInfo` so approved nodes can report these values to the platform instead of appearing as `Unknown` in node detail views.
+- Realtime `agent.auth` now includes `platformVersion` and `kernelVersion`, allowing the control plane to refresh node platform/kernel metadata even when nodes rely on realtime reconnects instead of enrollment refresh.
+- Managed self-update now refreshes the Linux root-profile helper and base sudoers file during binary replacement, preventing nodes from getting stuck with `root profile helper is not installed` after an update.
+- Base sudoers rules now list explicit root-profile helper commands (`apply off|operational|task|terminal|all`) for better compatibility with `sudo-rs` argument matching.
 
 ## [1.0.3] - 2026-04-04
 

@@ -91,6 +91,35 @@ func TestRenderLaunchdPlist(t *testing.T) {
 	}
 }
 
+func TestRenderBaseSudoersIncludesExplicitRootProfileCommands(t *testing.T) {
+	t.Parallel()
+
+	spec := platformSpec{
+		PrivilegedUpdateHelperPath: "/usr/local/libexec/noderax-agent-self-update",
+		RootProfileHelperPath:      "/usr/local/libexec/noderax-agent-root-profile",
+		ServiceUser:                "noderax",
+	}
+
+	sudoers := renderBaseSudoers(spec)
+
+	if strings.Contains(sudoers, "apply *") {
+		t.Fatalf("base sudoers must not use wildcard root profile command matching: %s", sudoers)
+	}
+
+	for _, snippet := range []string{
+		"/usr/local/libexec/noderax-agent-root-profile apply off",
+		"/usr/local/libexec/noderax-agent-root-profile apply operational",
+		"/usr/local/libexec/noderax-agent-root-profile apply task",
+		"/usr/local/libexec/noderax-agent-root-profile apply terminal",
+		"/usr/local/libexec/noderax-agent-root-profile apply all",
+		"noderax ALL=(root) NOPASSWD: NODERAX_AGENT_SELF_UPDATE, NODERAX_AGENT_ROOT_PROFILE",
+	} {
+		if !strings.Contains(sudoers, snippet) {
+			t.Fatalf("expected sudoers to contain %q, got %s", snippet, sudoers)
+		}
+	}
+}
+
 func TestConfigPathFromServiceDefinitionContent(t *testing.T) {
 	t.Parallel()
 
