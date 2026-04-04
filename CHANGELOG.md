@@ -15,6 +15,12 @@ Formatting rules:
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-04-04
+
+### Fixed
+
+- Managed self-update now refreshes the Linux root-profile helper and base sudoers file during binary replacement, preventing nodes from getting stuck with `root profile helper is not installed` after an update.
+
 ## [1.0.4] - 2026-04-04
 
 ### Fixed

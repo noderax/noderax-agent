@@ -316,6 +316,12 @@ func (c CLI) applyManagedUpdate(
 	if err := writePrivilegedUpdateHelper(spec); err != nil {
 		return fmt.Errorf("refresh privileged update helper: %w", err)
 	}
+	if err := writeRootProfileHelper(spec); err != nil {
+		return fmt.Errorf("refresh root profile helper: %w", err)
+	}
+	if err := writeBaseSudoers(spec); err != nil {
+		return fmt.Errorf("refresh base sudoers: %w", err)
+	}
 
 	report(
 		"restarting",
