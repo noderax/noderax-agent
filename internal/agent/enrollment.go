@@ -81,9 +81,11 @@ func RunInteractiveEnrollment(
 		Email:    email,
 		Hostname: hostInfo.Hostname,
 		AdditionalInfo: api.EnrollmentAdditionalInfo{
-			OS:           operatingSystem,
-			Arch:         hostInfo.Architecture,
-			AgentVersion: version,
+			OS:              operatingSystem,
+			Arch:            hostInfo.Architecture,
+			AgentVersion:    version,
+			PlatformVersion: hostInfo.PlatformVersion,
+			KernelVersion:   hostInfo.KernelVersion,
 		},
 	})
 	if err != nil {
