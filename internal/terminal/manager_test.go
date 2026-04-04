@@ -95,7 +95,7 @@ func TestTerminalLifecycle(t *testing.T) {
 	defer cancel()
 
 	sessionID := "session-1"
-	if err := manager.StartSession(ctx, sessionID, 80, 24); err != nil {
+	if err := manager.StartSession(ctx, sessionID, 80, 24, false); err != nil {
 		if errors.Is(err, syscall.EPERM) || strings.Contains(strings.ToLower(err.Error()), "operation not permitted") {
 			t.Skipf("PTY start is not permitted in this environment: %v", err)
 		}
@@ -225,7 +225,7 @@ func TestStartTerminalCommandFallsBackWithoutControllingTTY(t *testing.T) {
 		return reader, nil
 	}
 
-	cmd, ptmx, mode, killProcessGroup, err := startTerminalCommand("/bin/sh", 80, 24)
+	cmd, ptmx, mode, killProcessGroup, err := startTerminalCommand("/bin/sh", 80, 24, false)
 	if err != nil {
 		t.Fatalf("startTerminalCommand returned error: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestStartTerminalCommandFallsBackToMinimalMode(t *testing.T) {
 		return reader, nil
 	}
 
-	cmd, ptmx, mode, killProcessGroup, err := startTerminalCommand("/bin/sh", 80, 24)
+	cmd, ptmx, mode, killProcessGroup, err := startTerminalCommand("/bin/sh", 80, 24, false)
 	if err != nil {
 		t.Fatalf("startTerminalCommand returned error: %v", err)
 	}

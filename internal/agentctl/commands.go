@@ -31,6 +31,7 @@ const (
 	linuxBinaryPath                  = linuxInstallDir + "/noderax-agent"
 	linuxSymlinkPath                 = "/usr/local/bin/noderax-agent"
 	linuxPrivilegedUpdateHelperPath  = "/usr/local/libexec/noderax-agent-self-update"
+	linuxRootProfileHelperPath       = "/usr/local/libexec/noderax-agent-root-profile"
 	linuxPrivilegedUpdateRequestPath = linuxServiceHome + "/update-request.json"
 	linuxConfigPath                  = "/etc/noderax-agent/config.json"
 	linuxStatePath                   = "/var/lib/noderax-agent/agent_identity.json"
@@ -38,6 +39,8 @@ const (
 	linuxServiceName                 = "noderax-agent.service"
 	linuxServiceUser                 = "noderax"
 	linuxServiceHome                 = "/var/lib/noderax-agent"
+	linuxBaseSudoersPath             = "/etc/sudoers.d/noderax-agent"
+	linuxRootAccessSudoersPath       = "/etc/sudoers.d/noderax-agent-root-access"
 
 	macOSInstallDir  = "/usr/local/lib/noderax-agent"
 	macOSBinaryPath  = macOSInstallDir + "/noderax-agent"
@@ -54,6 +57,9 @@ type platformSpec struct {
 	BinaryPath                 string
 	SymlinkPath                string
 	PrivilegedUpdateHelperPath string
+	RootProfileHelperPath      string
+	BaseSudoersPath            string
+	RootAccessSudoersPath      string
 	ConfigPath                 string
 	StatePath                  string
 	ServiceUnit                string
@@ -227,6 +233,15 @@ func (c CLI) Install(ctx context.Context, args []string) error {
 	if err := writePrivilegedUpdateHelper(spec); err != nil {
 		return fmt.Errorf("write privileged update helper: %w", err)
 	}
+	if err := writeRootProfileHelper(spec); err != nil {
+		return fmt.Errorf("write root profile helper: %w", err)
+	}
+	if err := writeBaseSudoers(spec); err != nil {
+		return fmt.Errorf("write base sudoers: %w", err)
+	}
+	if err := applyRootAccessProfile(spec, "off"); err != nil {
+		return fmt.Errorf("apply default root access profile: %w", err)
+	}
 
 	switch spec.Manager {
 	case serviceManagerSystemd:
@@ -371,6 +386,42 @@ func (c CLI) Uninstall(ctx context.Context) error {
 		"privileged update helper",
 		spec.PrivilegedUpdateHelperPath,
 		helperRemoved,
+	)
+
+	rootProfileHelperRemoved, err := removeFileIfExists(spec.RootProfileHelperPath)
+	if err != nil {
+		return err
+	}
+	recordRemovalResult(
+		&removed,
+		&missing,
+		"root profile helper",
+		spec.RootProfileHelperPath,
+		rootProfileHelperRemoved,
+	)
+
+	baseSudoersRemoved, err := removeFileIfExists(spec.BaseSudoersPath)
+	if err != nil {
+		return err
+	}
+	recordRemovalResult(
+		&removed,
+		&missing,
+		"base sudoers",
+		spec.BaseSudoersPath,
+		baseSudoersRemoved,
+	)
+
+	rootAccessSudoersRemoved, err := removeFileIfExists(spec.RootAccessSudoersPath)
+	if err != nil {
+		return err
+	}
+	recordRemovalResult(
+		&removed,
+		&missing,
+		"root access sudoers",
+		spec.RootAccessSudoersPath,
+		rootAccessSudoersRemoved,
 	)
 
 	configRemoved, err := removeFileIfExists(configPath)
@@ -524,6 +575,9 @@ func currentPlatformSpec() (platformSpec, error) {
 			BinaryPath:                 linuxBinaryPath,
 			SymlinkPath:                linuxSymlinkPath,
 			PrivilegedUpdateHelperPath: linuxPrivilegedUpdateHelperPath,
+			RootProfileHelperPath:      linuxRootProfileHelperPath,
+			BaseSudoersPath:            linuxBaseSudoersPath,
+			RootAccessSudoersPath:      linuxRootAccessSudoersPath,
 			ConfigPath:                 linuxConfigPath,
 			StatePath:                  linuxStatePath,
 			ServiceUnit:                linuxServiceUnit,
@@ -542,6 +596,9 @@ func currentPlatformSpec() (platformSpec, error) {
 			BinaryPath:                 macOSBinaryPath,
 			SymlinkPath:                macOSSymlinkPath,
 			PrivilegedUpdateHelperPath: "",
+			RootProfileHelperPath:      "",
+			BaseSudoersPath:            "",
+			RootAccessSudoersPath:      "",
 			ConfigPath:                 macOSConfigPath,
 			StatePath:                  macOSStatePath,
 			ServiceUnit:                macOSServiceUnit,
@@ -1088,6 +1145,62 @@ func writePrivilegedUpdateHelper(spec platformSpec) error {
 	return nil
 }
 
+func writeRootProfileHelper(spec platformSpec) error {
+	path := strings.TrimSpace(spec.RootProfileHelperPath)
+	if path == "" {
+		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create helper directory for %s: %w", path, err)
+	}
+
+	content := renderRootProfileHelper(spec)
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		return fmt.Errorf("write helper %s: %w", path, err)
+	}
+
+	return nil
+}
+
+func writeBaseSudoers(spec platformSpec) error {
+	path := strings.TrimSpace(spec.BaseSudoersPath)
+	if path == "" {
+		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create sudoers directory for %s: %w", path, err)
+	}
+
+	if err := os.WriteFile(path, []byte(renderBaseSudoers(spec)), 0o440); err != nil {
+		return fmt.Errorf("write sudoers file %s: %w", path, err)
+	}
+
+	if commandExists("visudo") {
+		cmd := exec.Command("visudo", "-cf", path)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("validate sudoers file %s: %w: %s", path, err, strings.TrimSpace(string(output)))
+		}
+	}
+
+	return nil
+}
+
+func applyRootAccessProfile(spec platformSpec, profile string) error {
+	helperPath := strings.TrimSpace(spec.RootProfileHelperPath)
+	if helperPath == "" {
+		return nil
+	}
+
+	cmd := exec.Command(helperPath, "apply", strings.TrimSpace(profile))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("run root profile helper: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	return nil
+}
+
 func renderPrivilegedUpdateHelper(spec platformSpec) string {
 	return fmt.Sprintf(`#!/bin/sh
 set -eu
@@ -1099,6 +1212,141 @@ fi
 
 exec %q update --request-file %q
 `, spec.PrivilegedUpdateHelperPath, spec.BinaryPath, linuxPrivilegedUpdateRequestPath)
+}
+
+func renderBaseSudoers(spec platformSpec) string {
+	return fmt.Sprintf(`# Managed by the Noderax agent installer.
+Cmnd_Alias NODERAX_AGENT_SELF_UPDATE = %s
+Cmnd_Alias NODERAX_AGENT_ROOT_PROFILE = %s apply *
+%s ALL=(root) NOPASSWD: NODERAX_AGENT_SELF_UPDATE, NODERAX_AGENT_ROOT_PROFILE
+`, spec.PrivilegedUpdateHelperPath, spec.RootProfileHelperPath, spec.ServiceUser)
+}
+
+func renderRootProfileHelper(spec platformSpec) string {
+	return fmt.Sprintf(`#!/bin/sh
+set -eu
+
+HELPER_PATH=%q
+SERVICE_USER=%q
+SERVICE_NAME=%q
+SUDOERS_FILE=%q
+
+if [ "$#" -ne 2 ] || [ "$1" != "apply" ]; then
+  echo "usage: ${HELPER_PATH} apply <off|operational|task|terminal|all>" >&2
+  exit 64
+fi
+
+PROFILE="$2"
+mkdir -p "$(dirname "${SUDOERS_FILE}")"
+
+if [ "${PROFILE}" = "off" ]; then
+  rm -f "${SUDOERS_FILE}"
+  exit 0
+fi
+
+TMP_FILE="$(mktemp "${SUDOERS_FILE}.XXXXXX")"
+cleanup() {
+  rm -f "${TMP_FILE}"
+}
+trap cleanup EXIT INT TERM
+
+append_line() {
+  printf '%%s\n' "$1" >> "${TMP_FILE}"
+}
+
+append_alias() {
+  if [ -z "${ALIAS_LIST}" ]; then
+    ALIAS_LIST="$1"
+  else
+    ALIAS_LIST="${ALIAS_LIST}, $1"
+  fi
+}
+
+append_line "# Managed by the Noderax agent root profile helper."
+ALIAS_LIST=""
+
+append_operational_profile() {
+  APT_GET_PATH="$(command -v apt-get || true)"
+  SYSTEMCTL_PATH="$(command -v systemctl || true)"
+  REBOOT_PATH="$(command -v reboot || true)"
+
+  if [ -n "${APT_GET_PATH}" ]; then
+    append_line "Cmnd_Alias NODERAX_AGENT_PACKAGE_MUTATIONS = ${APT_GET_PATH} update, ${APT_GET_PATH} install -y -- *, ${APT_GET_PATH} remove -y -- *, ${APT_GET_PATH} purge -y -- *"
+    append_alias "NODERAX_AGENT_PACKAGE_MUTATIONS"
+  fi
+
+  if [ -n "${SYSTEMCTL_PATH}" ]; then
+    append_line "Cmnd_Alias NODERAX_AGENT_SERVICE_CONTROL = ${SYSTEMCTL_PATH} restart ${SERVICE_NAME}, ${SYSTEMCTL_PATH} restart ${SERVICE_NAME%%.service}"
+    append_alias "NODERAX_AGENT_SERVICE_CONTROL"
+  fi
+
+  if [ -n "${REBOOT_PATH}" ]; then
+    append_line "Cmnd_Alias NODERAX_AGENT_REBOOT = ${REBOOT_PATH}"
+    append_alias "NODERAX_AGENT_REBOOT"
+  fi
+}
+
+append_task_profile() {
+  append_line "Cmnd_Alias NODERAX_AGENT_TASK_ROOT = /bin/sh -lc *"
+  append_alias "NODERAX_AGENT_TASK_ROOT"
+}
+
+append_terminal_profile() {
+  TERMINAL_COMMANDS=""
+  for shell_path in /bin/bash /bin/zsh /bin/sh; do
+    if [ ! -x "${shell_path}" ]; then
+      continue
+    fi
+
+    if [ -n "${TERMINAL_COMMANDS}" ]; then
+      TERMINAL_COMMANDS="${TERMINAL_COMMANDS}, "
+    fi
+    TERMINAL_COMMANDS="${TERMINAL_COMMANDS}${shell_path} -i"
+  done
+
+  if [ -z "${TERMINAL_COMMANDS}" ]; then
+    TERMINAL_COMMANDS="/bin/sh -i"
+  fi
+
+  append_line "Cmnd_Alias NODERAX_AGENT_TERMINAL_ROOT = ${TERMINAL_COMMANDS}"
+  append_alias "NODERAX_AGENT_TERMINAL_ROOT"
+}
+
+case "${PROFILE}" in
+  operational)
+    append_operational_profile
+    ;;
+  task)
+    append_task_profile
+    ;;
+  terminal)
+    append_terminal_profile
+    ;;
+  all)
+    append_operational_profile
+    append_task_profile
+    append_terminal_profile
+    ;;
+  *)
+    echo "unsupported root profile: ${PROFILE}" >&2
+    exit 64
+    ;;
+esac
+
+if [ -z "${ALIAS_LIST}" ]; then
+  echo "root profile ${PROFILE} did not produce any sudo rules" >&2
+  exit 1
+fi
+
+append_line "${SERVICE_USER} ALL=(root) NOPASSWD: ${ALIAS_LIST}"
+chmod 0440 "${TMP_FILE}"
+
+if command -v visudo >/dev/null 2>&1; then
+  visudo -cf "${TMP_FILE}" >/dev/null
+fi
+
+install -o root -g root -m 0440 "${TMP_FILE}" "${SUDOERS_FILE}"
+`, spec.RootProfileHelperPath, spec.ServiceUser, spec.ServiceName, spec.RootAccessSudoersPath)
 }
 
 func writeServiceUnit(path, content string) error {

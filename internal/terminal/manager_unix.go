@@ -26,7 +26,7 @@ func prepareTerminalCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
-func startTerminalCommand(shell string, cols int, rows int) (*exec.Cmd, *os.File, string, bool, error) {
+func startTerminalCommand(shell string, cols int, rows int, runAsRoot bool) (*exec.Cmd, *os.File, string, bool, error) {
 	terminalSize := &pty.Winsize{
 		Cols: uint16(cols),
 		Rows: uint16(rows),
@@ -54,7 +54,7 @@ func startTerminalCommand(shell string, cols int, rows int) (*exec.Cmd, *os.File
 
 	attemptErrors := make([]string, 0, len(attempts))
 	for _, attempt := range attempts {
-		cmd := newTerminalCommand(shell)
+		cmd := newTerminalCommand(shell, runAsRoot)
 
 		var (
 			ptmx *os.File

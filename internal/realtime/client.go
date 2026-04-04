@@ -27,7 +27,7 @@ const (
 	maxTaskOutputChars       = 4000
 )
 
-type AuthSuccessHook func(context.Context)
+type AuthAckHook func(context.Context, authAckEvent)
 
 var ErrSessionNotActive = errors.New("realtime session is not authenticated")
 
@@ -49,8 +49,9 @@ type Service struct {
 	pingInterval        time.Duration
 	jitterRatio         float64
 	credentials         func() (string, string)
+	rootAccessReporter  func() *api.RootAccessAgentReport
 	dispatcher          *dispatcher
-	onAuthSuccess       AuthSuccessHook
+	onAuthAck           AuthAckHook
 	dialURL             string
 	healthURL           string
 	namespace           string
@@ -88,7 +89,8 @@ func NewService(
 	logger *slog.Logger,
 	credentials func() (string, string),
 	handler taskDispatcher,
-	onAuthSuccess AuthSuccessHook,
+	rootAccessReporter func() *api.RootAccessAgentReport,
+	onAuthAck AuthAckHook,
 ) (*Service, error) {
 	target, err := normalizeRealtimeTarget(apiURL, namespace, path)
 	if err != nil {
@@ -106,8 +108,8 @@ func NewService(
 	if pingInterval > 2*time.Second {
 		logger.Warn("realtime ping interval may be too high and can trigger server disconnect", "ping_interval", pingInterval, "recommended_max", 2*time.Second)
 	}
-	if onAuthSuccess == nil {
-		onAuthSuccess = func(context.Context) {}
+	if onAuthAck == nil {
+		onAuthAck = func(context.Context, authAckEvent) {}
 	}
 
 	svc := &Service{
@@ -115,14 +117,15 @@ func NewService(
 		requestTimeout: requestTimeout,
 		pingInterval:   pingInterval,
 		jitterRatio:    jitterRatio,
-		credentials:    credentials,
-		dispatcher:     newDispatcher(handler),
-		onAuthSuccess:  onAuthSuccess,
-		dialURL:        target.DialURL,
-		healthURL:      target.HealthURL,
-		namespace:      target.Namespace,
-		path:           target.Path,
-		outbound:       make(chan any, queueSize),
+		credentials:        credentials,
+		rootAccessReporter: rootAccessReporter,
+		dispatcher:         newDispatcher(handler),
+		onAuthAck:          onAuthAck,
+		dialURL:            target.DialURL,
+		healthURL:          target.HealthURL,
+		namespace:          target.Namespace,
+		path:               target.Path,
+		outbound:           make(chan any, queueSize),
 	}
 	return svc, nil
 }
@@ -523,6 +526,7 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 			NodeID:       nodeID,
 			AgentToken:   agentToken,
 			AgentVersion: s.runtimeAgentVersion,
+			RootAccess:   s.rootAccessReport(),
 		}
 		socket.Emit(EventAgentAuth, authPayload)
 	})
@@ -541,7 +545,7 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 		}
 		s.logger.Info("realtime auth acknowledged", "node_id", ack.NodeID)
 		s.sessionActive.Store(true)
-		s.onAuthSuccess(ctx)
+		s.onAuthAck(ctx, ack)
 		select {
 		case authOKCh <- struct{}{}:
 		default:
@@ -658,6 +662,14 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 	case <-authOKCh:
 		return &socketIOConn{manager: manager, socket: socket, disconnectCh: disconnectCh}, nil
 	}
+}
+
+func (s *Service) rootAccessReport() *api.RootAccessAgentReport {
+	if s.rootAccessReporter == nil {
+		return nil
+	}
+
+	return s.rootAccessReporter()
 }
 
 func (s *Service) runConnection(ctx context.Context, conn *socketIOConn) error {

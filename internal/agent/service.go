@@ -13,6 +13,7 @@ import (
 	"github.com/noderax/noderax-agent/internal/config"
 	"github.com/noderax/noderax-agent/internal/metrics"
 	"github.com/noderax/noderax-agent/internal/realtime"
+	"github.com/noderax/noderax-agent/internal/rootaccess"
 	"github.com/noderax/noderax-agent/internal/tasks"
 	"github.com/noderax/noderax-agent/internal/terminal"
 )
@@ -25,6 +26,7 @@ type Service struct {
 	identity *IdentityManager
 	store    *IdentityStore
 	metrics  *metrics.Service
+	root     *rootaccess.Manager
 	tasks    *tasks.Service
 	terminal *terminal.Manager
 	realtime *realtime.Service
@@ -32,7 +34,7 @@ type Service struct {
 }
 
 type terminalController interface {
-	StartSession(context.Context, string, int, int) error
+	StartSession(context.Context, string, int, int, bool) error
 	WriteInput(context.Context, string, string) error
 	ResizeSession(context.Context, string, int, int) error
 	StopSession(context.Context, string, string) error
@@ -56,12 +58,13 @@ func (h *realtimeCommandHandler) StartTerminalSession(
 	sessionID string,
 	cols int,
 	rows int,
+	runAsRoot bool,
 ) error {
 	if h.terminal == nil {
 		return fmt.Errorf("terminal manager is not configured")
 	}
 
-	return h.terminal.StartSession(ctx, sessionID, cols, rows)
+	return h.terminal.StartSession(ctx, sessionID, cols, rows, runAsRoot)
 }
 
 func (h *realtimeCommandHandler) WriteTerminalInput(
@@ -116,10 +119,12 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		cfg.TaskTimeout,
 		identity.Credentials,
 	)
+	rootManager := rootaccess.NewManager(cfg.StateFile, logger)
 	taskService.SetTaskPollingClient(client, cfg.TaskPollInterval)
 	taskService.SetTaskControlClient(client)
 	taskService.SetTaskAuthClient(client)
 	taskService.SetRealtimeEvents(tasks.NewHTTPTaskEvents(client, logger))
+	taskService.SetRootAccessController(rootManager)
 
 	metricsService := metrics.NewService(
 		nil,
@@ -141,7 +146,9 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		logger,
 		identity.Credentials,
 		commandHandler,
-		func(context.Context) {
+		rootManager.BuildAgentReport,
+		func(ctx context.Context, ack realtime.AuthAckPayload) {
+			rootManager.HandleDesiredSnapshot(ctx, ack.RootAccess)
 			metricsService.TriggerImmediateSnapshot()
 		},
 	)
@@ -157,6 +164,7 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		terminalEvents = realtimeService
 	}
 	terminalManager := terminal.NewManager(logger, terminalEvents)
+	terminalManager.SetRootTerminalChecker(rootManager.CanStartRootTerminal)
 	commandHandler.terminal = terminalManager
 	metricsService.SetRealtimeClient(realtimeService)
 
@@ -168,6 +176,7 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		identity: identity,
 		store:    NewIdentityStore(cfg.StateFile),
 		metrics:  metricsService,
+		root:     rootManager,
 		tasks:    taskService,
 		terminal: terminalManager,
 		realtime: realtimeService,

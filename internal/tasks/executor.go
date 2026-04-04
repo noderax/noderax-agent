@@ -30,6 +30,7 @@ const (
 
 	linuxPrivilegedUpdateHelperPath  = "/usr/local/libexec/noderax-agent-self-update"
 	linuxPrivilegedUpdateRequestPath = "/var/lib/noderax-agent/update-request.json"
+	linuxAgentServiceName            = "noderax-agent.service"
 )
 
 var (
@@ -45,6 +46,8 @@ type ShellExecPayload struct {
 	Environment    map[string]string `json:"environment,omitempty"`
 	Timeout        string            `json:"timeout,omitempty"`
 	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
+	RunAsRoot      bool              `json:"runAsRoot,omitempty"`
+	RootScope      string            `json:"rootScope,omitempty"`
 }
 
 type packageSearchPayload struct {
@@ -134,6 +137,7 @@ type ShellExecutor struct {
 	fileExists                  func(string) bool
 	privilegedUpdateRequestPath string
 	newCommand                  func(context.Context, string, ...string) commandRunner
+	rootScopeChecker            func(string) bool
 }
 
 func NewShellExecutor(defaultTimeout time.Duration) *ShellExecutor {
@@ -149,6 +153,10 @@ func NewShellExecutor(defaultTimeout time.Duration) *ShellExecutor {
 		privilegedUpdateRequestPath: linuxPrivilegedUpdateRequestPath,
 		newCommand:                  newExecCommandRunner,
 	}
+}
+
+func (e *ShellExecutor) SetRootScopeChecker(checker func(string) bool) {
+	e.rootScopeChecker = checker
 }
 
 func (e *ShellExecutor) TimeoutFor(task api.Task) time.Duration {
@@ -400,6 +408,26 @@ func (e *ShellExecutor) shellCommand(payload json.RawMessage) (commandSpec, erro
 	}
 
 	commandName, args := buildShellCommand(e.goos, parsed)
+	if parsed.RunAsRoot {
+		if strings.TrimSpace(parsed.RootScope) == "" {
+			return commandSpec{}, fmt.Errorf("%w: shell.exec root execution requires rootScope", ErrInvalidTaskPayload)
+		}
+		if e.rootScopeChecker != nil && !e.rootScopeChecker(parsed.RootScope) {
+			return commandSpec{}, fmt.Errorf("%w: current root access profile does not allow %s scope", ErrUnsupportedExecutionEnvironment, parsed.RootScope)
+		}
+		if parsed.RootScope == "operational" {
+			commandName, args, err = e.buildOperationalRootCommand(parsed.Command)
+			if err != nil {
+				return commandSpec{}, err
+			}
+		} else {
+			commandName, args, err = e.wrapWithSudo(commandName, args)
+			if err != nil {
+				return commandSpec{}, err
+			}
+		}
+	}
+
 	return commandSpec{
 		name:         commandName,
 		args:         args,
@@ -611,6 +639,39 @@ func (e *ShellExecutor) wrapWithSudo(
 	return sudoPath, append([]string{"-n", commandName}, args...), nil
 }
 
+func (e *ShellExecutor) buildOperationalRootCommand(
+	command string,
+) (string, []string, error) {
+	normalizedCommand := strings.Join(strings.Fields(strings.TrimSpace(command)), " ")
+
+	switch normalizedCommand {
+	case "reboot":
+		rebootPath, err := e.requireBinary("reboot")
+		if err != nil {
+			return "", nil, err
+		}
+		return e.wrapWithSudo(rebootPath, nil)
+	case "systemctl restart noderax-agent", "systemctl restart noderax-agent.service":
+		systemctlPath, err := e.requireBinary("systemctl")
+		if err != nil {
+			return "", nil, err
+		}
+		return e.wrapWithSudo(systemctlPath, []string{"restart", linuxAgentServiceName})
+	case "apt-get update":
+		aptGetPath, err := e.requireBinary("apt-get")
+		if err != nil {
+			return "", nil, err
+		}
+		return e.wrapWithSudo(aptGetPath, []string{"update"})
+	default:
+		return "", nil, fmt.Errorf(
+			"%w: unsupported operational root command %q",
+			ErrInvalidTaskPayload,
+			command,
+		)
+	}
+}
+
 func decodeShellPayload(payload json.RawMessage) (ShellExecPayload, error) {
 	var parsed ShellExecPayload
 	if len(payload) == 0 {
@@ -671,6 +732,9 @@ func normalizePackageNames(payload packageMutationPayload) ([]string, error) {
 
 func buildShellCommand(goos string, payload ShellExecPayload) (string, []string) {
 	shell := payload.Shell
+	if payload.RunAsRoot {
+		shell = "/bin/sh"
+	}
 	if shell == "" {
 		shell = "/bin/sh"
 	}

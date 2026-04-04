@@ -45,12 +45,14 @@ func (d *terminalIntegrationDispatcher) StartTerminalSession(
 	sessionID string,
 	cols int,
 	rows int,
+	runAsRoot bool,
 ) error {
 	select {
 	case d.startCh <- terminalStartEvent{
 		SessionID: sessionID,
 		Cols:      cols,
 		Rows:      rows,
+		RunAsRoot: runAsRoot,
 	}:
 	default:
 	}
@@ -134,7 +136,8 @@ func TestRealtimeConnectAuthDispatchLifecycle(t *testing.T) {
 			return "node-1", "token-1"
 		},
 		dispatcher,
-		func(context.Context) {},
+		func() *api.RootAccessAgentReport { return nil },
+		func(context.Context, authAckEvent) {},
 	)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -258,7 +261,8 @@ func TestRealtimeTerminalStartLifecycle(t *testing.T) {
 			return "node-1", "token-1"
 		},
 		dispatcher,
-		func(context.Context) {},
+		func() *api.RootAccessAgentReport { return nil },
+		func(context.Context, authAckEvent) {},
 	)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -371,7 +375,8 @@ func TestRealtimeTerminalStartErrorIsReported(t *testing.T) {
 			return "node-1", "token-1"
 		},
 		dispatcher,
-		func(context.Context) {},
+		func() *api.RootAccessAgentReport { return nil },
+		func(context.Context, authAckEvent) {},
 	)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)

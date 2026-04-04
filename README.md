@@ -15,6 +15,7 @@ Noderax Agent is the Go-based node runtime for the platform. It enrolls a machin
 - Dedicated `noderax` runtime user for the service and remote operations
 - Built-in CLI for install, start, stop, restart, status, and config updates
 - Detached self-update command for official tagged agent releases
+- API-synced root access profile manager with desired/applied/error state persistence
 - Realtime Socket.IO session for agent auth, metrics, and lifecycle signaling
 - HTTP long-poll task claiming as the primary execution path
 - Interactive terminal session support over the agent realtime socket
@@ -47,8 +48,8 @@ The installer:
 
 - checks and installs required packages
 - creates the `noderax` system user
-- grants passwordless `sudo` only for `apt-get install/remove/purge`
-- grants passwordless `sudo` to the dedicated `/usr/local/libexec/noderax-agent-self-update` helper used by fleet rollouts
+- installs the fixed privileged helpers used by self-update and root-profile reconciliation
+- keeps root access `off` by default until the control plane applies a node profile
 - downloads the correct prebuilt agent binary
 - bootstraps the node with the provided token
 - reports bootstrap progress back to the API so the web `Add node` modal can update live
@@ -136,7 +137,29 @@ Official tagged release notes come from [`CHANGELOG.md`](./CHANGELOG.md). The re
 - State: `/var/lib/noderax-agent/agent_identity.json`
 - Service: `/etc/systemd/system/noderax-agent.service`
 - Runtime user: `noderax`
-- Sudoers: `/etc/sudoers.d/noderax-agent`
+- Static sudoers: `/etc/sudoers.d/noderax-agent`
+- Dynamic root-access sudoers: `/etc/sudoers.d/noderax-agent-root-access`
+- Self-update helper: `/usr/local/libexec/noderax-agent-self-update`
+- Root-profile helper: `/usr/local/libexec/noderax-agent-root-profile`
+
+## Root Access Profiles
+
+The agent receives the desired node root profile from the API on realtime auth acknowledgement and every HTTP task-claim poll. It persists the applied state locally and reports it back on the next control call.
+
+Supported profiles:
+
+- `off`
+- `operational`
+- `task`
+- `terminal`
+- `all`
+
+Profile behavior:
+
+- `operational`: package mutations, `apt-get update`, service restart, and reboot
+- `task`: `shell.exec` and scheduled shell tasks can run with `runAsRoot=true`
+- `terminal`: interactive terminal sessions can start as root
+- `all`: union of the three surfaces
 
 ## Non-Interactive Bootstrap From A Local Binary
 

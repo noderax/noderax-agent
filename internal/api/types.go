@@ -5,6 +5,27 @@ import (
 	"time"
 )
 
+type RootAccessProfile string
+
+const (
+	RootAccessProfileOff         RootAccessProfile = "off"
+	RootAccessProfileOperational RootAccessProfile = "operational"
+	RootAccessProfileTask        RootAccessProfile = "task"
+	RootAccessProfileTerminal    RootAccessProfile = "terminal"
+	RootAccessProfileAll         RootAccessProfile = "all"
+)
+
+type RootAccessDesiredSnapshot struct {
+	Profile   RootAccessProfile `json:"profile"`
+	UpdatedAt string            `json:"updatedAt,omitempty"`
+}
+
+type RootAccessAgentReport struct {
+	AppliedProfile RootAccessProfile `json:"appliedProfile,omitempty"`
+	LastAppliedAt  string            `json:"lastAppliedAt,omitempty"`
+	LastError      string            `json:"lastError,omitempty"`
+}
+
 type RegisterRequest struct {
 	EnrollmentToken string `json:"enrollmentToken,omitempty"`
 	Hostname        string `json:"hostname"`
@@ -128,10 +149,12 @@ type ClaimTaskRequest struct {
 	MaxTasks     int      `json:"maxTasks,omitempty"`
 	WaitMS       int      `json:"waitMs,omitempty"`
 	Capabilities []string `json:"capabilities,omitempty"`
+	RootAccess   *RootAccessAgentReport `json:"rootAccess,omitempty"`
 }
 
 type ClaimTaskResponse struct {
-	Task *Task `json:"task,omitempty"`
+	Task       *Task                     `json:"task,omitempty"`
+	RootAccess *RootAccessDesiredSnapshot `json:"rootAccess,omitempty"`
 }
 
 type TaskAcceptedRequest struct {

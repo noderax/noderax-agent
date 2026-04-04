@@ -53,6 +53,7 @@ type session struct {
 type Manager struct {
 	logger *slog.Logger
 	events RealtimeEvents
+	canStartRootTerminal func() bool
 
 	mu       sync.Mutex
 	sessions map[string]*session
@@ -66,11 +67,16 @@ func NewManager(logger *slog.Logger, events RealtimeEvents) *Manager {
 	}
 }
 
+func (m *Manager) SetRootTerminalChecker(checker func() bool) {
+	m.canStartRootTerminal = checker
+}
+
 func (m *Manager) StartSession(
 	ctx context.Context,
 	sessionID string,
 	cols int,
 	rows int,
+	runAsRoot bool,
 ) error {
 	if strings.TrimSpace(sessionID) == "" {
 		return fmt.Errorf("session ID is required")
@@ -86,6 +92,10 @@ func (m *Manager) StartSession(
 		return fmt.Errorf("unable to resolve an interactive shell")
 	}
 
+	if runAsRoot && m.canStartRootTerminal != nil && !m.canStartRootTerminal() {
+		return fmt.Errorf("current root access profile does not allow root terminals")
+	}
+
 	var (
 		cmd              *exec.Cmd
 		ptmx             *os.File
@@ -99,6 +109,7 @@ func (m *Manager) StartSession(
 			shell,
 			normalizedCols,
 			normalizedRows,
+			runAsRoot,
 		)
 		if candidateErr == nil {
 			cmd = candidateCmd
@@ -426,8 +437,13 @@ func selectShellCandidates() []string {
 	return resolvedCandidates
 }
 
-func newTerminalCommand(shell string) *exec.Cmd {
-	cmd := exec.Command(shell, "-i")
+func newTerminalCommand(shell string, runAsRoot bool) *exec.Cmd {
+	var cmd *exec.Cmd
+	if runAsRoot {
+		cmd = exec.Command("sudo", "-n", "-H", shell, "-i")
+	} else {
+		cmd = exec.Command(shell, "-i")
+	}
 	prepareTerminalCommand(cmd)
 	cmd.Env = mergeEnvironment(map[string]string{
 		"TERM":  "xterm-256color",

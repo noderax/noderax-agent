@@ -21,6 +21,7 @@ type Service struct {
 	taskClient     TaskPollingClient
 	taskControl    TaskControlClient
 	authClient     TaskAuthClient
+	rootAccess     RootAccessController
 	taskPollPeriod time.Duration
 
 	mu      sync.Mutex
@@ -39,6 +40,12 @@ type TaskControlClient interface {
 type TaskAuthClient interface {
 	SetAgentToken(string)
 	SetAgentNodeID(string)
+}
+
+type RootAccessController interface {
+	BuildAgentReport() *api.RootAccessAgentReport
+	HandleDesiredSnapshot(context.Context, *api.RootAccessDesiredSnapshot)
+	CanUseRootScope(string) bool
 }
 
 const (
@@ -128,6 +135,15 @@ func (s *Service) SetRealtimeEvents(events RealtimeTaskEvents) {
 	s.realtime = events
 }
 
+func (s *Service) SetRootAccessController(controller RootAccessController) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rootAccess = controller
+	if controller != nil {
+		s.executor.SetRootScopeChecker(controller.CanUseRootScope)
+	}
+}
+
 func (s *Service) DispatchRealtimeTask(ctx context.Context, task api.Task) bool {
 	return s.dispatchTask(ctx, task, "realtime")
 }
@@ -173,6 +189,12 @@ func (s *Service) taskControlConfig() TaskControlClient {
 	return s.taskControl
 }
 
+func (s *Service) rootAccessConfig() RootAccessController {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rootAccess
+}
+
 func (s *Service) pollTasks(ctx context.Context, client TaskPollingClient, period time.Duration) {
 	if period <= 0 {
 		period = 15 * time.Second
@@ -191,7 +213,11 @@ func (s *Service) pollTasks(ctx context.Context, client TaskPollingClient, perio
 		}
 
 		nodeID, _ := s.credentials()
+		rootAccess := s.rootAccessConfig()
 		claimRequest := api.ClaimTaskRequest{MaxTasks: 1, WaitMS: waitMS}
+		if rootAccess != nil {
+			claimRequest.RootAccess = rootAccess.BuildAgentReport()
+		}
 		s.logger.Debug("claiming task over HTTP", "node_id", nodeID, "endpoint", taskClaimEndpoint, "max_tasks", claimRequest.MaxTasks, "wait_ms", claimRequest.WaitMS)
 
 		claimTimeout := s.requestTimeout + period + time.Second
@@ -261,6 +287,10 @@ func (s *Service) pollTasks(ctx context.Context, client TaskPollingClient, perio
 		}
 
 		networkBackoff = time.Second
+
+		if rootAccess != nil {
+			rootAccess.HandleDesiredSnapshot(ctx, response.RootAccess)
+		}
 
 		if response.Task == nil || response.Task.ID == "" {
 			s.logger.Debug("task claim returned empty", "endpoint", taskClaimEndpoint)
@@ -624,4 +654,3 @@ func (s *realtimeTaskLogSink) run() {
 		}
 	}
 }
-

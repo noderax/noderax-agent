@@ -36,7 +36,7 @@ type taskDispatcher interface {
 }
 
 type terminalStartDispatcher interface {
-	StartTerminalSession(context.Context, string, int, int) error
+	StartTerminalSession(context.Context, string, int, int, bool) error
 }
 
 type terminalInputDispatcher interface {
@@ -91,7 +91,13 @@ func (d *dispatcher) handleMessage(ctx context.Context, data []byte) error {
 		if !ok {
 			return nil
 		}
-		return handler.StartTerminalSession(ctx, event.SessionID, event.Cols, event.Rows)
+		return handler.StartTerminalSession(
+			ctx,
+			event.SessionID,
+			event.Cols,
+			event.Rows,
+			event.RunAsRoot,
+		)
 	case EventTerminalInput:
 		var event terminalInputEvent
 		if err := json.Unmarshal(data, &event); err != nil {
@@ -132,6 +138,7 @@ type authEvent struct {
 	NodeID       string `json:"nodeId"`
 	AgentToken   string `json:"agentToken"`
 	AgentVersion string `json:"agentVersion,omitempty"`
+	RootAccess   *api.RootAccessAgentReport `json:"rootAccess,omitempty"`
 }
 
 type pingEvent struct {
@@ -191,7 +198,10 @@ type taskCompletedEvent struct {
 type authAckEvent struct {
 	Authenticated bool   `json:"authenticated"`
 	NodeID        string `json:"nodeId,omitempty"`
+	RootAccess    *api.RootAccessDesiredSnapshot `json:"rootAccess,omitempty"`
 }
+
+type AuthAckPayload = authAckEvent
 
 type authErrorEvent struct {
 	Message string `json:"message,omitempty"`
@@ -203,6 +213,7 @@ type terminalStartEvent struct {
 	SessionID string `json:"sessionId"`
 	Cols      int    `json:"cols"`
 	Rows      int    `json:"rows"`
+	RunAsRoot bool   `json:"runAsRoot,omitempty"`
 }
 
 type terminalInputEvent struct {
