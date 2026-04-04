@@ -3,7 +3,9 @@ package agentctl
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -146,6 +148,11 @@ func TestRenderRootProfileHelperSupportsCombinedProfiles(t *testing.T) {
 		"append_operational_profile",
 		"append_task_profile",
 		"append_terminal_profile",
+		"for shell_name in bash zsh sh; do",
+		`append_terminal_command "$(command -v "${shell_name}" || true)"`,
+		"/usr/bin/bash",
+		"/usr/bin/zsh",
+		"/usr/bin/sh",
 	} {
 		if !strings.Contains(helper, snippet) {
 			t.Fatalf("expected root profile helper to contain %q, got %s", snippet, helper)
@@ -178,6 +185,49 @@ func TestConfigPathFromServiceDefinitionContent(t *testing.T) {
 
 	if got := configPathFromServiceDefinition(launchdPath); got != macOSConfigPath {
 		t.Fatalf("configPathFromServiceDefinition(launchd) = %q, want %q", got, macOSConfigPath)
+	}
+}
+
+func TestLoadPersistedRootAccessProfileReadsAppliedProfile(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	statePath := filepath.Join(stateDir, "agent_identity.json")
+	rootAccessStatePath := filepath.Join(stateDir, "root_access_state.json")
+
+	content, err := json.Marshal(map[string]any{
+		"appliedProfile": "terminal",
+	})
+	if err != nil {
+		t.Fatalf("marshal root access state: %v", err)
+	}
+	if err := os.WriteFile(rootAccessStatePath, content, 0o600); err != nil {
+		t.Fatalf("write root access state: %v", err)
+	}
+
+	profile, found, err := loadPersistedRootAccessProfile(statePath)
+	if err != nil {
+		t.Fatalf("loadPersistedRootAccessProfile returned error: %v", err)
+	}
+	if !found {
+		t.Fatal("expected persisted root access profile to be found")
+	}
+	if profile != "terminal" {
+		t.Fatalf("persisted root access profile mismatch: got %q want %q", profile, "terminal")
+	}
+}
+
+func TestLoadPersistedRootAccessProfileSkipsMissingState(t *testing.T) {
+	t.Parallel()
+
+	profile, found, err := loadPersistedRootAccessProfile(
+		filepath.Join(t.TempDir(), "agent_identity.json"),
+	)
+	if err != nil {
+		t.Fatalf("loadPersistedRootAccessProfile returned error: %v", err)
+	}
+	if found {
+		t.Fatalf("expected missing root access state to be ignored, got profile %q", profile)
 	}
 }
 

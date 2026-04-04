@@ -15,7 +15,7 @@ Formatting rules:
 
 ## [Unreleased]
 
-## [1.0.5] - 2026-04-04
+## [1.0.5] - 2026-04-05
 
 ### Fixed
 
@@ -23,6 +23,8 @@ Formatting rules:
 - Package purge requests now queue the dedicated `packagePurge` task type instead of overloading `packageRemove`, so purge behavior stays consistent from the API through agent execution and task history.
 - Linux base sudoers rules now explicitly allow `apply operational_task`, `apply operational_terminal`, and `apply task_terminal`, allowing composite root profiles to reconcile correctly on hosts with strict sudo argument matching.
 - Root access profile changes now push to connected agents immediately and refresh the reported applied state without waiting for the next long-poll cycle, so profile switches no longer appear stuck after being changed in the panel.
+- Root terminal sessions now use the same supported shell allowlist as the generated sudoers rules, preventing `sudo-rs: I'm sorry noderax. I'm afraid I can't do that` failures when `terminal` root access is applied.
+- Managed self-update now reapplies the persisted root access profile after refreshing helpers and sudoers files, so nodes already set to `terminal` pick up the corrected terminal root rules immediately after updating.
 
 ## [1.0.4] - 2026-04-04
 

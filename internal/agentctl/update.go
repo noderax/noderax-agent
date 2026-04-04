@@ -328,6 +328,9 @@ func (c CLI) applyManagedUpdate(
 	if err := writeBaseSudoers(spec); err != nil {
 		return fmt.Errorf("refresh base sudoers: %w", err)
 	}
+	if err := reconcilePersistedRootAccessProfile(spec); err != nil {
+		return fmt.Errorf("refresh applied root access profile: %w", err)
+	}
 
 	report(
 		"restarting",

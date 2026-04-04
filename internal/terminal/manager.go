@@ -24,6 +24,17 @@ const (
 	outputFlushThreshold = 1024
 )
 
+var supportedRootShellPaths = []string{
+	"/bin/bash",
+	"/usr/bin/bash",
+	"/bin/zsh",
+	"/usr/bin/zsh",
+	"/bin/sh",
+	"/usr/bin/sh",
+}
+
+var supportedRootShellNames = []string{"bash", "zsh", "sh"}
+
 var (
 	ErrSessionExists       = errors.New("terminal session already exists")
 	ErrSessionNotFound     = errors.New("terminal session was not found")
@@ -51,8 +62,8 @@ type session struct {
 }
 
 type Manager struct {
-	logger *slog.Logger
-	events RealtimeEvents
+	logger               *slog.Logger
+	events               RealtimeEvents
 	canStartRootTerminal func() bool
 
 	mu       sync.Mutex
@@ -88,6 +99,9 @@ func (m *Manager) StartSession(
 	}
 
 	shellCandidates := selectShellCandidates()
+	if runAsRoot {
+		shellCandidates = selectRootShellCandidates()
+	}
 	if len(shellCandidates) == 0 {
 		return fmt.Errorf("unable to resolve an interactive shell")
 	}
@@ -403,11 +417,28 @@ func selectShell() (string, error) {
 func selectShellCandidates() []string {
 	candidates := []string{
 		strings.TrimSpace(os.Getenv("SHELL")),
-		"/bin/bash",
-		"/bin/zsh",
-		"/bin/sh",
 	}
 
+	candidates = append(candidates, selectRootShellCandidates()...)
+
+	return dedupeShellCandidates(candidates)
+}
+
+func selectRootShellCandidates() []string {
+	candidates := make([]string, 0, len(supportedRootShellNames)+len(supportedRootShellPaths))
+
+	for _, shellName := range supportedRootShellNames {
+		if resolvedPath, err := exec.LookPath(shellName); err == nil {
+			candidates = append(candidates, resolvedPath)
+		}
+	}
+
+	candidates = append(candidates, supportedRootShellPaths...)
+
+	return dedupeShellCandidates(candidates)
+}
+
+func dedupeShellCandidates(candidates []string) []string {
 	resolvedCandidates := make([]string, 0, len(candidates))
 	seen := make(map[string]struct{}, len(candidates))
 

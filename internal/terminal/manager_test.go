@@ -72,6 +72,29 @@ func TestSelectShellFallback(t *testing.T) {
 	}
 }
 
+func TestSelectRootShellCandidatesIgnoresUnsupportedShellEnv(t *testing.T) {
+	t.Parallel()
+
+	originalShell := os.Getenv("SHELL")
+	t.Cleanup(func() {
+		_ = os.Setenv("SHELL", originalShell)
+	})
+	_ = os.Setenv("SHELL", "/usr/bin/fish")
+
+	candidates := selectRootShellCandidates()
+	if len(candidates) == 0 {
+		t.Fatal("expected at least one supported root shell candidate")
+	}
+
+	for _, candidate := range candidates {
+		switch candidate {
+		case "/bin/bash", "/usr/bin/bash", "/bin/zsh", "/usr/bin/zsh", "/bin/sh", "/usr/bin/sh":
+		default:
+			t.Fatalf("unexpected root shell candidate %q", candidate)
+		}
+	}
+}
+
 func TestNormalizeSizeDefaults(t *testing.T) {
 	t.Parallel()
 

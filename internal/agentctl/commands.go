@@ -1277,6 +1277,60 @@ func applyRootAccessProfile(spec platformSpec, profile string) error {
 	return nil
 }
 
+func reconcilePersistedRootAccessProfile(spec platformSpec) error {
+	profile, found, err := loadPersistedRootAccessProfile(spec.StatePath)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+
+	return applyRootAccessProfile(spec, profile)
+}
+
+func loadPersistedRootAccessProfile(statePath string) (string, bool, error) {
+	cleanStatePath := filepath.Clean(strings.TrimSpace(statePath))
+	if cleanStatePath == "." || cleanStatePath == "" {
+		return "", false, nil
+	}
+
+	rootAccessStatePath := filepath.Join(
+		filepath.Dir(cleanStatePath),
+		"root_access_state.json",
+	)
+
+	content, err := os.ReadFile(rootAccessStatePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf(
+			"read root access state %s: %w",
+			rootAccessStatePath,
+			err,
+		)
+	}
+
+	var state struct {
+		AppliedProfile api.RootAccessProfile `json:"appliedProfile"`
+	}
+	if err := json.Unmarshal(content, &state); err != nil {
+		return "", false, fmt.Errorf(
+			"decode root access state %s: %w",
+			rootAccessStatePath,
+			err,
+		)
+	}
+
+	profile := strings.TrimSpace(string(state.AppliedProfile))
+	if profile == "" {
+		return "", false, nil
+	}
+
+	return profile, true, nil
+}
+
 func renderPrivilegedUpdateHelper(spec platformSpec) string {
 	return fmt.Sprintf(`#!/bin/sh
 set -eu
@@ -1491,15 +1545,31 @@ append_task_profile() {
 
 append_terminal_profile() {
   TERMINAL_COMMANDS=""
-  for shell_path in /bin/bash /bin/zsh /bin/sh; do
-    if [ ! -x "${shell_path}" ]; then
-      continue
+  append_terminal_command() {
+    shell_path="$1"
+
+    if [ -z "${shell_path}" ] || [ ! -x "${shell_path}" ]; then
+      return
     fi
+
+    case ",${TERMINAL_COMMANDS}," in
+      *",${shell_path} -i,"*)
+        return
+        ;;
+    esac
 
     if [ -n "${TERMINAL_COMMANDS}" ]; then
       TERMINAL_COMMANDS="${TERMINAL_COMMANDS}, "
     fi
     TERMINAL_COMMANDS="${TERMINAL_COMMANDS}${shell_path} -i"
+  }
+
+  for shell_name in bash zsh sh; do
+    append_terminal_command "$(command -v "${shell_name}" || true)"
+  done
+
+  for shell_path in /bin/bash /usr/bin/bash /bin/zsh /usr/bin/zsh /bin/sh /usr/bin/sh; do
+    append_terminal_command "${shell_path}"
   done
 
   if [ -z "${TERMINAL_COMMANDS}" ]; then
