@@ -44,22 +44,22 @@ type Stats struct {
 }
 
 type Service struct {
-	logger              *slog.Logger
-	requestTimeout      time.Duration
-	pingInterval        time.Duration
-	jitterRatio         float64
-	credentials         func() (string, string)
-	rootAccessReporter  func() *api.RootAccessAgentReport
-	dispatcher          *dispatcher
-	onAuthAck           AuthAckHook
-	dialURL             string
-	healthURL           string
-	namespace           string
-	path                string
-	runtimeAgentVersion string
+	logger                 *slog.Logger
+	requestTimeout         time.Duration
+	pingInterval           time.Duration
+	jitterRatio            float64
+	credentials            func() (string, string)
+	rootAccessReporter     func() *api.RootAccessAgentReport
+	dispatcher             *dispatcher
+	onAuthAck              AuthAckHook
+	dialURL                string
+	healthURL              string
+	namespace              string
+	path                   string
+	runtimeAgentVersion    string
 	runtimePlatformVersion string
-	runtimeKernelVersion string
-	outbound            chan any
+	runtimeKernelVersion   string
+	outbound               chan any
 
 	reconnects      atomic.Int64
 	pingsSent       atomic.Int64
@@ -115,10 +115,10 @@ func NewService(
 	}
 
 	svc := &Service{
-		logger:         logger,
-		requestTimeout: requestTimeout,
-		pingInterval:   pingInterval,
-		jitterRatio:    jitterRatio,
+		logger:             logger,
+		requestTimeout:     requestTimeout,
+		pingInterval:       pingInterval,
+		jitterRatio:        jitterRatio,
 		credentials:        credentials,
 		rootAccessReporter: rootAccessReporter,
 		dispatcher:         newDispatcher(handler),
@@ -532,13 +532,13 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 
 	socket.OnConnect(func() {
 		authPayload := authEvent{
-			Type:         EventAgentAuth,
-			NodeID:       nodeID,
-			AgentToken:   agentToken,
-			AgentVersion: s.runtimeAgentVersion,
+			Type:            EventAgentAuth,
+			NodeID:          nodeID,
+			AgentToken:      agentToken,
+			AgentVersion:    s.runtimeAgentVersion,
 			PlatformVersion: s.runtimePlatformVersion,
-			KernelVersion: s.runtimeKernelVersion,
-			RootAccess:   s.rootAccessReport(),
+			KernelVersion:   s.runtimeKernelVersion,
+			RootAccess:      s.rootAccessReport(),
 		}
 		socket.Emit(EventAgentAuth, authPayload)
 	})
@@ -562,6 +562,36 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 		case authOKCh <- struct{}{}:
 		default:
 		}
+	})
+
+	socket.OnEvent(EventRootAccessUpdated, func(payload map[string]any) {
+		event := rootAccessUpdatedEvent{}
+		if bytes, err := json.Marshal(payload); err == nil {
+			_ = json.Unmarshal(bytes, &event)
+		}
+		if event.RootAccess == nil {
+			return
+		}
+
+		s.logger.Info(
+			"realtime root access update received",
+			"profile", event.RootAccess.Profile,
+			"updated_at", event.RootAccess.UpdatedAt,
+		)
+		s.onAuthAck(ctx, authAckEvent{
+			Authenticated: true,
+			NodeID:        nodeID,
+			RootAccess:    event.RootAccess,
+		})
+		socket.Emit(EventAgentAuth, authEvent{
+			Type:            EventAgentAuth,
+			NodeID:          nodeID,
+			AgentToken:      agentToken,
+			AgentVersion:    s.runtimeAgentVersion,
+			PlatformVersion: s.runtimePlatformVersion,
+			KernelVersion:   s.runtimeKernelVersion,
+			RootAccess:      s.rootAccessReport(),
+		})
 	})
 
 	socket.OnEvent(EventAgentAuthErr, func(payload map[string]any) {

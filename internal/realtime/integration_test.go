@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -398,6 +399,140 @@ func TestRealtimeTerminalStartErrorIsReported(t *testing.T) {
 		}
 	case <-time.After(8 * time.Second):
 		t.Fatalf("timed out waiting for terminal.error")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for service shutdown")
+	}
+}
+
+func TestRealtimeRootAccessUpdateTriggersDesiredSnapshotHandler(t *testing.T) {
+	ioServer := sio.NewServer(nil)
+	namespace := ioServer.Of("/agent-realtime")
+
+	rootAccessCh := make(chan *api.RootAccessDesiredSnapshot, 1)
+	authCh := make(chan authEvent, 2)
+	var appliedReportMu sync.RWMutex
+	var appliedReport *api.RootAccessAgentReport
+
+	namespace.OnConnection(func(socket sio.ServerSocket) {
+		socket.OnEvent(EventAgentAuth, func(payload map[string]any) {
+			var auth authEvent
+			b, _ := json.Marshal(payload)
+			_ = json.Unmarshal(b, &auth)
+			select {
+			case authCh <- auth:
+			default:
+			}
+
+			socket.Emit(EventAgentAuthAck, map[string]any{
+				"authenticated": true,
+				"nodeId":        auth.NodeID,
+			})
+			socket.Emit(EventRootAccessUpdated, map[string]any{
+				"type": EventRootAccessUpdated,
+				"rootAccess": map[string]any{
+					"profile":   "operational_task",
+					"updatedAt": "2026-04-04T17:40:00.000Z",
+				},
+			})
+		})
+	})
+
+	if err := ioServer.Run(); err != nil {
+		t.Fatalf("socket server run: %v", err)
+	}
+	defer ioServer.Close()
+
+	mux := http.NewServeMux()
+	mux.Handle("/socket.io/", ioServer)
+	httpServer := httptest.NewServer(mux)
+	defer httpServer.Close()
+
+	dispatcher := &integrationDispatcher{dispatchCh: make(chan api.Task, 1)}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	svc, err := NewService(
+		httpServer.URL,
+		"/agent-realtime",
+		"/socket.io/",
+		5*time.Second,
+		10*time.Second,
+		32,
+		0.2,
+		logger,
+		func() (string, string) {
+			return "node-1", "token-1"
+		},
+		dispatcher,
+		func() *api.RootAccessAgentReport {
+			appliedReportMu.RLock()
+			defer appliedReportMu.RUnlock()
+			return appliedReport
+		},
+		func(_ context.Context, ack authAckEvent) {
+			if ack.RootAccess == nil {
+				return
+			}
+			appliedReportMu.Lock()
+			appliedReport = &api.RootAccessAgentReport{
+				AppliedProfile: ack.RootAccess.Profile,
+				LastAppliedAt:  ack.RootAccess.UpdatedAt,
+			}
+			appliedReportMu.Unlock()
+			select {
+			case rootAccessCh <- ack.RootAccess:
+			default:
+			}
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.Run(runCtx)
+	}()
+
+	select {
+	case auth := <-authCh:
+		if auth.RootAccess != nil {
+			t.Fatalf("initial auth should not include updated root access report: %+v", auth)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatalf("timed out waiting for initial auth")
+	}
+
+	select {
+	case snapshot := <-rootAccessCh:
+		if snapshot.Profile != api.RootAccessProfileOperationalTask {
+			t.Fatalf("unexpected root access profile: %+v", snapshot)
+		}
+		if snapshot.UpdatedAt != "2026-04-04T17:40:00.000Z" {
+			t.Fatalf("unexpected root access timestamp: %+v", snapshot)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatalf("timed out waiting for root-access.updated")
+	}
+
+	select {
+	case auth := <-authCh:
+		if auth.RootAccess == nil {
+			t.Fatalf("expected follow-up auth with root access report")
+		}
+		if auth.RootAccess.AppliedProfile != api.RootAccessProfileOperationalTask {
+			t.Fatalf("unexpected follow-up root access report: %+v", auth.RootAccess)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatalf("timed out waiting for follow-up auth report")
 	}
 
 	cancel()

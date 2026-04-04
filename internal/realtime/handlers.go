@@ -10,25 +10,26 @@ import (
 )
 
 const (
-	EventAgentAuth      = "agent.auth"
-	EventAgentAuthAck   = "agent.auth.ack"
-	EventAgentAuthErr   = "agent.auth.error"
-	EventAgentError     = "agent.error"
-	EventAgentPing      = "agent.ping"
-	EventAgentMetrics   = "agent.metrics"
-	EventTerminalStart  = "terminal.start"
-	EventTerminalInput  = "terminal.input"
-	EventTerminalResize = "terminal.resize"
-	EventTerminalStop   = "terminal.stop"
-	EventTerminalOpened = "terminal.opened"
-	EventTerminalOutput = "terminal.output"
-	EventTerminalExited = "terminal.exited"
-	EventTerminalError  = "terminal.error"
-	EventTaskDispatch   = "task.dispatch"
-	EventTaskAccepted   = "task.accepted"
-	EventTaskStarted    = "task.started"
-	EventTaskLog        = "task.log"
-	EventTaskComplete   = "task.completed"
+	EventAgentAuth         = "agent.auth"
+	EventAgentAuthAck      = "agent.auth.ack"
+	EventAgentAuthErr      = "agent.auth.error"
+	EventAgentError        = "agent.error"
+	EventAgentPing         = "agent.ping"
+	EventAgentMetrics      = "agent.metrics"
+	EventRootAccessUpdated = "root-access.updated"
+	EventTerminalStart     = "terminal.start"
+	EventTerminalInput     = "terminal.input"
+	EventTerminalResize    = "terminal.resize"
+	EventTerminalStop      = "terminal.stop"
+	EventTerminalOpened    = "terminal.opened"
+	EventTerminalOutput    = "terminal.output"
+	EventTerminalExited    = "terminal.exited"
+	EventTerminalError     = "terminal.error"
+	EventTaskDispatch      = "task.dispatch"
+	EventTaskAccepted      = "task.accepted"
+	EventTaskStarted       = "task.started"
+	EventTaskLog           = "task.log"
+	EventTaskComplete      = "task.completed"
 )
 
 type taskDispatcher interface {
@@ -134,13 +135,13 @@ func (d *dispatcher) handleMessage(ctx context.Context, data []byte) error {
 }
 
 type authEvent struct {
-	Type         string `json:"type"`
-	NodeID       string `json:"nodeId"`
-	AgentToken   string `json:"agentToken"`
-	AgentVersion string `json:"agentVersion,omitempty"`
-	PlatformVersion string `json:"platformVersion,omitempty"`
-	KernelVersion   string `json:"kernelVersion,omitempty"`
-	RootAccess   *api.RootAccessAgentReport `json:"rootAccess,omitempty"`
+	Type            string                     `json:"type"`
+	NodeID          string                     `json:"nodeId"`
+	AgentToken      string                     `json:"agentToken"`
+	AgentVersion    string                     `json:"agentVersion,omitempty"`
+	PlatformVersion string                     `json:"platformVersion,omitempty"`
+	KernelVersion   string                     `json:"kernelVersion,omitempty"`
+	RootAccess      *api.RootAccessAgentReport `json:"rootAccess,omitempty"`
 }
 
 type pingEvent struct {
@@ -198,12 +199,17 @@ type taskCompletedEvent struct {
 }
 
 type authAckEvent struct {
-	Authenticated bool   `json:"authenticated"`
-	NodeID        string `json:"nodeId,omitempty"`
+	Authenticated bool                           `json:"authenticated"`
+	NodeID        string                         `json:"nodeId,omitempty"`
 	RootAccess    *api.RootAccessDesiredSnapshot `json:"rootAccess,omitempty"`
 }
 
 type AuthAckPayload = authAckEvent
+
+type rootAccessUpdatedEvent struct {
+	Type       string                         `json:"type"`
+	RootAccess *api.RootAccessDesiredSnapshot `json:"rootAccess,omitempty"`
+}
 
 type authErrorEvent struct {
 	Message string `json:"message,omitempty"`
