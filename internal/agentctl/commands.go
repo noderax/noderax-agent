@@ -1394,6 +1394,9 @@ func renderBaseSudoers(spec platformSpec) string {
 		rootProfileHelperPath + " apply operational",
 		rootProfileHelperPath + " apply task",
 		rootProfileHelperPath + " apply terminal",
+		rootProfileHelperPath + " apply operational_task",
+		rootProfileHelperPath + " apply operational_terminal",
+		rootProfileHelperPath + " apply task_terminal",
 		rootProfileHelperPath + " apply all",
 	}, ", ")
 	explicitAllowedCommands := strings.Join([]string{
@@ -1402,6 +1405,9 @@ func renderBaseSudoers(spec platformSpec) string {
 		rootProfileHelperPath + " apply operational",
 		rootProfileHelperPath + " apply task",
 		rootProfileHelperPath + " apply terminal",
+		rootProfileHelperPath + " apply operational_task",
+		rootProfileHelperPath + " apply operational_terminal",
+		rootProfileHelperPath + " apply task_terminal",
 		rootProfileHelperPath + " apply all",
 	}, ", ")
 

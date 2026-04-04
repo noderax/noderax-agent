@@ -15,6 +15,14 @@ Formatting rules:
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-04-04
+
+### Fixed
+
+- Operational root panel actions now stay locked until the agent reports the profile as applied, preventing package install/remove, `apt-get update`, restart, and reboot requests from being queued while sync is still pending or failed.
+- Package purge requests now queue the dedicated `packagePurge` task type instead of overloading `packageRemove`, so purge behavior stays consistent from the API through agent execution and task history.
+- Linux base sudoers rules now explicitly allow `apply operational_task`, `apply operational_terminal`, and `apply task_terminal`, allowing composite root profiles to reconcile correctly on hosts with strict sudo argument matching.
+
 ## [1.0.4] - 2026-04-04
 
 ### Fixed

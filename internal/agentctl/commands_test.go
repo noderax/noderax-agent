@@ -112,11 +112,43 @@ func TestRenderBaseSudoersIncludesExplicitRootProfileCommands(t *testing.T) {
 		"/usr/local/libexec/noderax-agent-root-profile apply operational",
 		"/usr/local/libexec/noderax-agent-root-profile apply task",
 		"/usr/local/libexec/noderax-agent-root-profile apply terminal",
+		"/usr/local/libexec/noderax-agent-root-profile apply operational_task",
+		"/usr/local/libexec/noderax-agent-root-profile apply operational_terminal",
+		"/usr/local/libexec/noderax-agent-root-profile apply task_terminal",
 		"/usr/local/libexec/noderax-agent-root-profile apply all",
 		"noderax ALL=(root) NOPASSWD: /usr/local/libexec/noderax-agent-self-update",
 	} {
 		if !strings.Contains(sudoers, snippet) {
 			t.Fatalf("expected sudoers to contain %q, got %s", snippet, sudoers)
+		}
+	}
+}
+
+func TestRenderRootProfileHelperSupportsCombinedProfiles(t *testing.T) {
+	t.Parallel()
+
+	spec := platformSpec{
+		RootProfileHelperPath:     "/usr/local/libexec/noderax-agent-root-profile",
+		ServiceUser:               "noderax",
+		ServiceName:               "noderax-agent.service",
+		RootAccessSudoersPath:     "/etc/sudoers.d/noderax-agent-root-access",
+		PackageMutationHelperPath: "/usr/local/libexec/noderax-agent-package-mutation",
+		TaskRootHelperPath:        "/usr/local/libexec/noderax-agent-task-root",
+	}
+
+	helper := renderRootProfileHelper(spec)
+
+	for _, snippet := range []string{
+		"usage: ${HELPER_PATH} apply <off|operational|task|terminal|operational_task|operational_terminal|task_terminal|all>",
+		"operational_task)",
+		"operational_terminal)",
+		"task_terminal)",
+		"append_operational_profile",
+		"append_task_profile",
+		"append_terminal_profile",
+	} {
+		if !strings.Contains(helper, snippet) {
+			t.Fatalf("expected root profile helper to contain %q, got %s", snippet, helper)
 		}
 	}
 }
