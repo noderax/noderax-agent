@@ -87,9 +87,9 @@ func (m *Manager) CanUseRootScope(scope string) bool {
 
 	switch strings.TrimSpace(scope) {
 	case "task":
-		return profile == api.RootAccessProfileTask || profile == api.RootAccessProfileAll
+		return profileAllowsTask(profile)
 	case "operational":
-		return profile == api.RootAccessProfileOperational || profile == api.RootAccessProfileAll
+		return profileAllowsOperational(profile)
 	default:
 		return false
 	}
@@ -97,7 +97,7 @@ func (m *Manager) CanUseRootScope(scope string) bool {
 
 func (m *Manager) CanStartRootTerminal() bool {
 	profile := m.appliedProfile()
-	return profile == api.RootAccessProfileTerminal || profile == api.RootAccessProfileAll
+	return profileAllowsTerminal(profile)
 }
 
 func (m *Manager) appliedProfile() api.RootAccessProfile {
@@ -220,4 +220,25 @@ func buildStatePath(identityStatePath string) string {
 	}
 
 	return filepath.Join(filepath.Dir(cleanPath), "root_access_state.json")
+}
+
+func profileAllowsOperational(profile api.RootAccessProfile) bool {
+	return profile == api.RootAccessProfileOperational ||
+		profile == api.RootAccessProfileOperationalTask ||
+		profile == api.RootAccessProfileOperationalTerminal ||
+		profile == api.RootAccessProfileAll
+}
+
+func profileAllowsTask(profile api.RootAccessProfile) bool {
+	return profile == api.RootAccessProfileTask ||
+		profile == api.RootAccessProfileOperationalTask ||
+		profile == api.RootAccessProfileTaskTerminal ||
+		profile == api.RootAccessProfileAll
+}
+
+func profileAllowsTerminal(profile api.RootAccessProfile) bool {
+	return profile == api.RootAccessProfileTerminal ||
+		profile == api.RootAccessProfileOperationalTerminal ||
+		profile == api.RootAccessProfileTaskTerminal ||
+		profile == api.RootAccessProfileAll
 }

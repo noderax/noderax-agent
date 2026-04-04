@@ -319,6 +319,12 @@ func (c CLI) applyManagedUpdate(
 	if err := writeRootProfileHelper(spec); err != nil {
 		return fmt.Errorf("refresh root profile helper: %w", err)
 	}
+	if err := writePackageMutationHelper(spec); err != nil {
+		return fmt.Errorf("refresh package mutation helper: %w", err)
+	}
+	if err := writeTaskRootHelper(spec); err != nil {
+		return fmt.Errorf("refresh task root helper: %w", err)
+	}
 	if err := writeBaseSudoers(spec); err != nil {
 		return fmt.Errorf("refresh base sudoers: %w", err)
 	}

@@ -8,11 +8,14 @@ import (
 type RootAccessProfile string
 
 const (
-	RootAccessProfileOff         RootAccessProfile = "off"
-	RootAccessProfileOperational RootAccessProfile = "operational"
-	RootAccessProfileTask        RootAccessProfile = "task"
-	RootAccessProfileTerminal    RootAccessProfile = "terminal"
-	RootAccessProfileAll         RootAccessProfile = "all"
+	RootAccessProfileOff                 RootAccessProfile = "off"
+	RootAccessProfileOperational         RootAccessProfile = "operational"
+	RootAccessProfileTask                RootAccessProfile = "task"
+	RootAccessProfileTerminal            RootAccessProfile = "terminal"
+	RootAccessProfileOperationalTask     RootAccessProfile = "operational_task"
+	RootAccessProfileOperationalTerminal RootAccessProfile = "operational_terminal"
+	RootAccessProfileTaskTerminal        RootAccessProfile = "task_terminal"
+	RootAccessProfileAll                 RootAccessProfile = "all"
 )
 
 type RootAccessDesiredSnapshot struct {
@@ -146,14 +149,14 @@ type CompleteTaskRequest struct {
 }
 
 type ClaimTaskRequest struct {
-	MaxTasks     int      `json:"maxTasks,omitempty"`
-	WaitMS       int      `json:"waitMs,omitempty"`
-	Capabilities []string `json:"capabilities,omitempty"`
+	MaxTasks     int                    `json:"maxTasks,omitempty"`
+	WaitMS       int                    `json:"waitMs,omitempty"`
+	Capabilities []string               `json:"capabilities,omitempty"`
 	RootAccess   *RootAccessAgentReport `json:"rootAccess,omitempty"`
 }
 
 type ClaimTaskResponse struct {
-	Task       *Task                     `json:"task,omitempty"`
+	Task       *Task                      `json:"task,omitempty"`
 	RootAccess *RootAccessDesiredSnapshot `json:"rootAccess,omitempty"`
 }
 

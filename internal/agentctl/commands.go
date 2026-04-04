@@ -32,7 +32,11 @@ const (
 	linuxSymlinkPath                 = "/usr/local/bin/noderax-agent"
 	linuxPrivilegedUpdateHelperPath  = "/usr/local/libexec/noderax-agent-self-update"
 	linuxRootProfileHelperPath       = "/usr/local/libexec/noderax-agent-root-profile"
+	linuxPackageMutationHelperPath   = "/usr/local/libexec/noderax-agent-package-mutation"
+	linuxTaskRootHelperPath          = "/usr/local/libexec/noderax-agent-task-root"
 	linuxPrivilegedUpdateRequestPath = linuxServiceHome + "/update-request.json"
+	linuxPackageMutationRequestPath  = linuxServiceHome + "/package-mutation-request.txt"
+	linuxTaskRootRequestPath         = linuxServiceHome + "/task-root-request.txt"
 	linuxConfigPath                  = "/etc/noderax-agent/config.json"
 	linuxStatePath                   = "/var/lib/noderax-agent/agent_identity.json"
 	linuxServiceUnit                 = "/etc/systemd/system/noderax-agent.service"
@@ -58,6 +62,8 @@ type platformSpec struct {
 	SymlinkPath                string
 	PrivilegedUpdateHelperPath string
 	RootProfileHelperPath      string
+	PackageMutationHelperPath  string
+	TaskRootHelperPath         string
 	BaseSudoersPath            string
 	RootAccessSudoersPath      string
 	ConfigPath                 string
@@ -236,6 +242,12 @@ func (c CLI) Install(ctx context.Context, args []string) error {
 	if err := writeRootProfileHelper(spec); err != nil {
 		return fmt.Errorf("write root profile helper: %w", err)
 	}
+	if err := writePackageMutationHelper(spec); err != nil {
+		return fmt.Errorf("write package mutation helper: %w", err)
+	}
+	if err := writeTaskRootHelper(spec); err != nil {
+		return fmt.Errorf("write task root helper: %w", err)
+	}
 	if err := writeBaseSudoers(spec); err != nil {
 		return fmt.Errorf("write base sudoers: %w", err)
 	}
@@ -398,6 +410,30 @@ func (c CLI) Uninstall(ctx context.Context) error {
 		"root profile helper",
 		spec.RootProfileHelperPath,
 		rootProfileHelperRemoved,
+	)
+
+	packageMutationHelperRemoved, err := removeFileIfExists(spec.PackageMutationHelperPath)
+	if err != nil {
+		return err
+	}
+	recordRemovalResult(
+		&removed,
+		&missing,
+		"package mutation helper",
+		spec.PackageMutationHelperPath,
+		packageMutationHelperRemoved,
+	)
+
+	taskRootHelperRemoved, err := removeFileIfExists(spec.TaskRootHelperPath)
+	if err != nil {
+		return err
+	}
+	recordRemovalResult(
+		&removed,
+		&missing,
+		"task root helper",
+		spec.TaskRootHelperPath,
+		taskRootHelperRemoved,
 	)
 
 	baseSudoersRemoved, err := removeFileIfExists(spec.BaseSudoersPath)
@@ -576,6 +612,8 @@ func currentPlatformSpec() (platformSpec, error) {
 			SymlinkPath:                linuxSymlinkPath,
 			PrivilegedUpdateHelperPath: linuxPrivilegedUpdateHelperPath,
 			RootProfileHelperPath:      linuxRootProfileHelperPath,
+			PackageMutationHelperPath:  linuxPackageMutationHelperPath,
+			TaskRootHelperPath:         linuxTaskRootHelperPath,
 			BaseSudoersPath:            linuxBaseSudoersPath,
 			RootAccessSudoersPath:      linuxRootAccessSudoersPath,
 			ConfigPath:                 linuxConfigPath,
@@ -597,6 +635,8 @@ func currentPlatformSpec() (platformSpec, error) {
 			SymlinkPath:                macOSSymlinkPath,
 			PrivilegedUpdateHelperPath: "",
 			RootProfileHelperPath:      "",
+			PackageMutationHelperPath:  "",
+			TaskRootHelperPath:         "",
 			BaseSudoersPath:            "",
 			RootAccessSudoersPath:      "",
 			ConfigPath:                 macOSConfigPath,
@@ -1163,6 +1203,42 @@ func writeRootProfileHelper(spec platformSpec) error {
 	return nil
 }
 
+func writePackageMutationHelper(spec platformSpec) error {
+	path := strings.TrimSpace(spec.PackageMutationHelperPath)
+	if path == "" {
+		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create helper directory for %s: %w", path, err)
+	}
+
+	content := renderPackageMutationHelper(spec)
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		return fmt.Errorf("write helper %s: %w", path, err)
+	}
+
+	return nil
+}
+
+func writeTaskRootHelper(spec platformSpec) error {
+	path := strings.TrimSpace(spec.TaskRootHelperPath)
+	if path == "" {
+		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create helper directory for %s: %w", path, err)
+	}
+
+	content := renderTaskRootHelper(spec)
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		return fmt.Errorf("write helper %s: %w", path, err)
+	}
+
+	return nil
+}
+
 func writeBaseSudoers(spec platformSpec) error {
 	path := strings.TrimSpace(spec.BaseSudoersPath)
 	if path == "" {
@@ -1214,6 +1290,103 @@ exec %q update --request-file %q
 `, spec.PrivilegedUpdateHelperPath, spec.BinaryPath, linuxPrivilegedUpdateRequestPath)
 }
 
+func renderPackageMutationHelper(spec platformSpec) string {
+	return fmt.Sprintf(`#!/bin/sh
+set -eu
+
+HELPER_PATH=%q
+REQUEST_FILE=%q
+
+if [ "$#" -ne 0 ]; then
+	echo "usage: ${HELPER_PATH}" >&2
+	exit 64
+fi
+
+if [ ! -f "${REQUEST_FILE}" ]; then
+	echo "package mutation request file is missing" >&2
+	exit 1
+fi
+
+OPERATION=""
+set --
+LINE_NO=0
+while IFS= read -r line || [ -n "${line}" ]; do
+	LINE_NO=$((LINE_NO + 1))
+	if [ "${LINE_NO}" -eq 1 ]; then
+		OPERATION="${line}"
+		continue
+	fi
+
+	pkg="$(printf '%%s' "${line}" | tr -d '[:space:]')"
+	if [ -z "${pkg}" ]; then
+		continue
+	fi
+
+	if ! printf '%%s\n' "${pkg}" | grep -Eq '^[a-z0-9][a-z0-9.+:-]*$'; then
+		echo "invalid package name in request: ${pkg}" >&2
+		rm -f "${REQUEST_FILE}"
+		exit 64
+	fi
+
+	set -- "$@" "${pkg}"
+done < "${REQUEST_FILE}"
+
+rm -f "${REQUEST_FILE}"
+
+APT_GET_PATH="$(command -v apt-get || true)"
+if [ -z "${APT_GET_PATH}" ]; then
+	echo "apt-get is required for package mutation helper" >&2
+	exit 1
+fi
+
+case "${OPERATION}" in
+	update)
+		exec "${APT_GET_PATH}" update
+		;;
+	install|remove|purge)
+		if [ "$#" -eq 0 ]; then
+			echo "package mutation request must include package names for ${OPERATION}" >&2
+			exit 64
+		fi
+		exec "${APT_GET_PATH}" "${OPERATION}" -y -- "$@"
+		;;
+	*)
+		echo "unsupported package mutation operation: ${OPERATION}" >&2
+		exit 64
+		;;
+esac
+`, spec.PackageMutationHelperPath, linuxPackageMutationRequestPath)
+}
+
+func renderTaskRootHelper(spec platformSpec) string {
+	return fmt.Sprintf(`#!/bin/sh
+set -eu
+
+HELPER_PATH=%q
+REQUEST_FILE=%q
+
+if [ "$#" -ne 0 ]; then
+	echo "usage: ${HELPER_PATH}" >&2
+	exit 64
+fi
+
+if [ ! -f "${REQUEST_FILE}" ]; then
+	echo "task root request file is missing" >&2
+	exit 1
+fi
+
+COMMAND="$(cat "${REQUEST_FILE}")"
+rm -f "${REQUEST_FILE}"
+
+if [ -z "$(printf '%%s' "${COMMAND}" | tr -d '[:space:]')" ]; then
+	echo "task root request is empty" >&2
+	exit 64
+fi
+
+exec /bin/sh -lc "${COMMAND}"
+`, spec.TaskRootHelperPath, linuxTaskRootRequestPath)
+}
+
 func renderBaseSudoers(spec platformSpec) string {
 	rootProfileHelperPath := spec.RootProfileHelperPath
 	rootProfileCommands := strings.Join([]string{
@@ -1247,9 +1420,11 @@ HELPER_PATH=%q
 SERVICE_USER=%q
 SERVICE_NAME=%q
 SUDOERS_FILE=%q
+PACKAGE_MUTATION_HELPER=%q
+TASK_ROOT_HELPER=%q
 
 if [ "$#" -ne 2 ] || [ "$1" != "apply" ]; then
-  echo "usage: ${HELPER_PATH} apply <off|operational|task|terminal|all>" >&2
+	echo "usage: ${HELPER_PATH} apply <off|operational|task|terminal|operational_task|operational_terminal|task_terminal|all>" >&2
   exit 64
 fi
 
@@ -1288,7 +1463,7 @@ append_operational_profile() {
   REBOOT_PATH="$(command -v reboot || true)"
 
   if [ -n "${APT_GET_PATH}" ]; then
-    append_line "Cmnd_Alias NODERAX_AGENT_PACKAGE_MUTATIONS = ${APT_GET_PATH} update, ${APT_GET_PATH} install -y -- *, ${APT_GET_PATH} remove -y -- *, ${APT_GET_PATH} purge -y -- *"
+		append_line "Cmnd_Alias NODERAX_AGENT_PACKAGE_MUTATIONS = ${PACKAGE_MUTATION_HELPER}"
     append_alias "NODERAX_AGENT_PACKAGE_MUTATIONS"
   fi
 
@@ -1304,7 +1479,7 @@ append_operational_profile() {
 }
 
 append_task_profile() {
-  append_line "Cmnd_Alias NODERAX_AGENT_TASK_ROOT = /bin/sh -lc *"
+	append_line "Cmnd_Alias NODERAX_AGENT_TASK_ROOT = ${TASK_ROOT_HELPER}"
   append_alias "NODERAX_AGENT_TASK_ROOT"
 }
 
@@ -1339,6 +1514,18 @@ case "${PROFILE}" in
   terminal)
     append_terminal_profile
     ;;
+	operational_task)
+		append_operational_profile
+		append_task_profile
+		;;
+	operational_terminal)
+		append_operational_profile
+		append_terminal_profile
+		;;
+	task_terminal)
+		append_task_profile
+		append_terminal_profile
+		;;
   all)
     append_operational_profile
     append_task_profile
@@ -1363,7 +1550,7 @@ if command -v visudo >/dev/null 2>&1; then
 fi
 
 install -o root -g root -m 0440 "${TMP_FILE}" "${SUDOERS_FILE}"
-`, spec.RootProfileHelperPath, spec.ServiceUser, spec.ServiceName, spec.RootAccessSudoersPath)
+`, spec.RootProfileHelperPath, spec.ServiceUser, spec.ServiceName, spec.RootAccessSudoersPath, spec.PackageMutationHelperPath, spec.TaskRootHelperPath)
 }
 
 func writeServiceUnit(path, content string) error {

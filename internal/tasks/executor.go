@@ -30,6 +30,10 @@ const (
 
 	linuxPrivilegedUpdateHelperPath  = "/usr/local/libexec/noderax-agent-self-update"
 	linuxPrivilegedUpdateRequestPath = "/var/lib/noderax-agent/update-request.json"
+	linuxPackageMutationHelperPath   = "/usr/local/libexec/noderax-agent-package-mutation"
+	linuxPackageMutationRequestPath  = "/var/lib/noderax-agent/package-mutation-request.txt"
+	linuxTaskRootHelperPath          = "/usr/local/libexec/noderax-agent-task-root"
+	linuxTaskRootRequestPath         = "/var/lib/noderax-agent/task-root-request.txt"
 	linuxAgentServiceName            = "noderax-agent.service"
 )
 
@@ -136,6 +140,8 @@ type ShellExecutor struct {
 	executablePath              func() (string, error)
 	fileExists                  func(string) bool
 	privilegedUpdateRequestPath string
+	packageMutationRequestPath  string
+	taskRootRequestPath         string
 	newCommand                  func(context.Context, string, ...string) commandRunner
 	rootScopeChecker            func(string) bool
 }
@@ -151,6 +157,8 @@ func NewShellExecutor(defaultTimeout time.Duration) *ShellExecutor {
 			return err == nil
 		},
 		privilegedUpdateRequestPath: linuxPrivilegedUpdateRequestPath,
+		packageMutationRequestPath:  linuxPackageMutationRequestPath,
+		taskRootRequestPath:         linuxTaskRootRequestPath,
 		newCommand:                  newExecCommandRunner,
 	}
 }
@@ -421,7 +429,14 @@ func (e *ShellExecutor) shellCommand(payload json.RawMessage) (commandSpec, erro
 				return commandSpec{}, err
 			}
 		} else {
-			commandName, args, err = e.wrapWithSudo(commandName, args)
+			if e.goos == "linux" && e.fileExists(linuxTaskRootHelperPath) {
+				if err := writeTaskRootRequest(e.taskRootRequestPath, parsed.Command); err != nil {
+					return commandSpec{}, fmt.Errorf("%w: write task root request: %v", ErrUnsupportedExecutionEnvironment, err)
+				}
+				commandName, args, err = e.wrapWithSudo(linuxTaskRootHelperPath, nil)
+			} else {
+				commandName, args, err = e.wrapWithSudo(commandName, args)
+			}
 			if err != nil {
 				return commandSpec{}, err
 			}
@@ -524,7 +539,7 @@ func (e *ShellExecutor) packageInstallCommand(payload json.RawMessage) (commandS
 	}
 
 	args := append([]string{"install", "-y", "--"}, packages...)
-	commandName, commandArgs, err := e.wrapWithSudo(aptGetPath, args)
+	commandName, commandArgs, err := e.wrapPackageMutationCommand("install", aptGetPath, args, packages)
 	if err != nil {
 		return commandSpec{}, err
 	}
@@ -562,7 +577,7 @@ func (e *ShellExecutor) packageRemoveCommand(payload json.RawMessage) (commandSp
 	}
 
 	args := append([]string{action, "-y", "--"}, packages...)
-	commandName, commandArgs, err := e.wrapWithSudo(aptGetPath, args)
+	commandName, commandArgs, err := e.wrapPackageMutationCommand(action, aptGetPath, args, packages)
 	if err != nil {
 		return commandSpec{}, err
 	}
@@ -595,7 +610,7 @@ func (e *ShellExecutor) packagePurgeCommand(payload json.RawMessage) (commandSpe
 	}
 
 	args := append([]string{"purge", "-y", "--"}, packages...)
-	commandName, commandArgs, err := e.wrapWithSudo(aptGetPath, args)
+	commandName, commandArgs, err := e.wrapPackageMutationCommand("purge", aptGetPath, args, packages)
 	if err != nil {
 		return commandSpec{}, err
 	}
@@ -639,6 +654,22 @@ func (e *ShellExecutor) wrapWithSudo(
 	return sudoPath, append([]string{"-n", commandName}, args...), nil
 }
 
+func (e *ShellExecutor) wrapPackageMutationCommand(
+	operation string,
+	commandName string,
+	args []string,
+	packages []string,
+) (string, []string, error) {
+	if e.goos == "linux" && e.fileExists(linuxPackageMutationHelperPath) {
+		if err := writePackageMutationRequest(e.packageMutationRequestPath, operation, packages); err != nil {
+			return "", nil, fmt.Errorf("%w: write package mutation request: %v", ErrUnsupportedExecutionEnvironment, err)
+		}
+		return e.wrapWithSudo(linuxPackageMutationHelperPath, nil)
+	}
+
+	return e.wrapWithSudo(commandName, args)
+}
+
 func (e *ShellExecutor) buildOperationalRootCommand(
 	command string,
 ) (string, []string, error) {
@@ -661,6 +692,12 @@ func (e *ShellExecutor) buildOperationalRootCommand(
 		aptGetPath, err := e.requireBinary("apt-get")
 		if err != nil {
 			return "", nil, err
+		}
+		if e.goos == "linux" && e.fileExists(linuxPackageMutationHelperPath) {
+			if err := writePackageMutationRequest(e.packageMutationRequestPath, "update", nil); err != nil {
+				return "", nil, fmt.Errorf("%w: write package mutation request: %v", ErrUnsupportedExecutionEnvironment, err)
+			}
+			return e.wrapWithSudo(linuxPackageMutationHelperPath, nil)
 		}
 		return e.wrapWithSudo(aptGetPath, []string{"update"})
 	default:
@@ -753,6 +790,103 @@ func formatCommandForLog(name string, args []string) string {
 	}
 
 	return strings.Join(parts, " ")
+}
+
+func writePackageMutationRequest(path string, operation string, packages []string) error {
+	cleanPath := filepath.Clean(strings.TrimSpace(path))
+	if cleanPath == "" {
+		return fmt.Errorf("request path is empty")
+	}
+
+	if err := os.MkdirAll(filepath.Dir(cleanPath), 0o755); err != nil {
+		return fmt.Errorf("create package mutation request directory: %w", err)
+	}
+
+	file, err := os.CreateTemp(filepath.Dir(cleanPath), ".noderax-agent-package-mutation-*.txt")
+	if err != nil {
+		return fmt.Errorf("create package mutation request file: %w", err)
+	}
+
+	tempPath := file.Name()
+	writeErr := false
+	if _, err := file.WriteString(strings.TrimSpace(operation) + "\n"); err != nil {
+		writeErr = true
+		file.Close()
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("write package mutation operation: %w", err)
+	}
+
+	for _, pkg := range packages {
+		name := strings.TrimSpace(pkg)
+		if name == "" {
+			continue
+		}
+		if _, err := file.WriteString(name + "\n"); err != nil {
+			writeErr = true
+			file.Close()
+			_ = os.Remove(tempPath)
+			return fmt.Errorf("write package mutation request package: %w", err)
+		}
+	}
+
+	if err := file.Chmod(0o600); err != nil {
+		file.Close()
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("chmod package mutation request file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("close package mutation request file: %w", err)
+	}
+
+	if err := os.Rename(tempPath, cleanPath); err != nil {
+		_ = os.Remove(tempPath)
+		if writeErr {
+			return fmt.Errorf("replace package mutation request file after write failure: %w", err)
+		}
+		return fmt.Errorf("replace package mutation request file: %w", err)
+	}
+
+	return nil
+}
+
+func writeTaskRootRequest(path string, command string) error {
+	cleanPath := filepath.Clean(strings.TrimSpace(path))
+	if cleanPath == "" {
+		return fmt.Errorf("request path is empty")
+	}
+
+	if err := os.MkdirAll(filepath.Dir(cleanPath), 0o755); err != nil {
+		return fmt.Errorf("create task root request directory: %w", err)
+	}
+
+	tempFile, err := os.CreateTemp(filepath.Dir(cleanPath), ".noderax-agent-task-root-*.txt")
+	if err != nil {
+		return fmt.Errorf("create task root request file: %w", err)
+	}
+
+	tempPath := tempFile.Name()
+	if _, err := tempFile.WriteString(command); err != nil {
+		tempFile.Close()
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("write task root request file: %w", err)
+	}
+	if err := tempFile.Chmod(0o600); err != nil {
+		tempFile.Close()
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("chmod task root request file: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("close task root request file: %w", err)
+	}
+
+	if err := os.Rename(tempPath, cleanPath); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("replace task root request file: %w", err)
+	}
+
+	return nil
 }
 
 func writeManagedUpdateRequest(path string, payload agentUpdatePayload) error {

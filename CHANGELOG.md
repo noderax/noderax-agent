@@ -23,6 +23,9 @@ Formatting rules:
 - Realtime `agent.auth` now includes `platformVersion` and `kernelVersion`, allowing the control plane to refresh node platform/kernel metadata even when nodes rely on realtime reconnects instead of enrollment refresh.
 - Managed self-update now refreshes the Linux root-profile helper and base sudoers file during binary replacement, preventing nodes from getting stuck with `root profile helper is not installed` after an update.
 - Base sudoers rules now list explicit root-profile helper commands (`apply off|operational|task|terminal|all`) for better compatibility with `sudo-rs` argument matching.
+- Linux package mutations now use a dedicated privileged helper and request-file handoff so `install`, `remove`, `purge`, and operational `apt-get update` continue working on hosts that enforce strict `sudo-rs` argument matching.
+- Root task execution now uses a dedicated task-root helper handoff path, avoiding broad wildcard sudo command patterns that fail on `sudo-rs` deployments.
+- Root access profile handling now supports composite profile combinations (`operational_task`, `operational_terminal`, `task_terminal`) so mixed capability sets are applied and validated consistently.
 
 ## [1.0.3] - 2026-04-04
 
