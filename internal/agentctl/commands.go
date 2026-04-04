@@ -1223,12 +1223,20 @@ func renderBaseSudoers(spec platformSpec) string {
 		rootProfileHelperPath + " apply terminal",
 		rootProfileHelperPath + " apply all",
 	}, ", ")
+	explicitAllowedCommands := strings.Join([]string{
+		spec.PrivilegedUpdateHelperPath,
+		rootProfileHelperPath + " apply off",
+		rootProfileHelperPath + " apply operational",
+		rootProfileHelperPath + " apply task",
+		rootProfileHelperPath + " apply terminal",
+		rootProfileHelperPath + " apply all",
+	}, ", ")
 
 	return fmt.Sprintf(`# Managed by the Noderax agent installer.
 Cmnd_Alias NODERAX_AGENT_SELF_UPDATE = %s
 Cmnd_Alias NODERAX_AGENT_ROOT_PROFILE = %s
-%s ALL=(root) NOPASSWD: NODERAX_AGENT_SELF_UPDATE, NODERAX_AGENT_ROOT_PROFILE
-`, spec.PrivilegedUpdateHelperPath, rootProfileCommands, spec.ServiceUser)
+%s ALL=(root) NOPASSWD: %s
+`, spec.PrivilegedUpdateHelperPath, rootProfileCommands, spec.ServiceUser, explicitAllowedCommands)
 }
 
 func renderRootProfileHelper(spec platformSpec) string {

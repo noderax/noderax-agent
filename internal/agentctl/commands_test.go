@@ -107,12 +107,13 @@ func TestRenderBaseSudoersIncludesExplicitRootProfileCommands(t *testing.T) {
 	}
 
 	for _, snippet := range []string{
+		"/usr/local/libexec/noderax-agent-self-update",
 		"/usr/local/libexec/noderax-agent-root-profile apply off",
 		"/usr/local/libexec/noderax-agent-root-profile apply operational",
 		"/usr/local/libexec/noderax-agent-root-profile apply task",
 		"/usr/local/libexec/noderax-agent-root-profile apply terminal",
 		"/usr/local/libexec/noderax-agent-root-profile apply all",
-		"noderax ALL=(root) NOPASSWD: NODERAX_AGENT_SELF_UPDATE, NODERAX_AGENT_ROOT_PROFILE",
+		"noderax ALL=(root) NOPASSWD: /usr/local/libexec/noderax-agent-self-update",
 	} {
 		if !strings.Contains(sudoers, snippet) {
 			t.Fatalf("expected sudoers to contain %q, got %s", snippet, sudoers)
