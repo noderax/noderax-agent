@@ -57,6 +57,8 @@ type Service struct {
 	namespace           string
 	path                string
 	runtimeAgentVersion string
+	runtimePlatformVersion string
+	runtimeKernelVersion string
 	outbound            chan any
 
 	reconnects      atomic.Int64
@@ -383,6 +385,14 @@ func (s *Service) SetRuntimeAgentVersion(version string) {
 	s.runtimeAgentVersion = strings.TrimSpace(version)
 }
 
+func (s *Service) SetRuntimePlatformVersion(version string) {
+	s.runtimePlatformVersion = strings.TrimSpace(version)
+}
+
+func (s *Service) SetRuntimeKernelVersion(version string) {
+	s.runtimeKernelVersion = strings.TrimSpace(version)
+}
+
 func (s *Service) SnapshotStats() Stats {
 	return Stats{
 		Reconnects:      s.reconnects.Load(),
@@ -526,6 +536,8 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 			NodeID:       nodeID,
 			AgentToken:   agentToken,
 			AgentVersion: s.runtimeAgentVersion,
+			PlatformVersion: s.runtimePlatformVersion,
+			KernelVersion: s.runtimeKernelVersion,
 			RootAccess:   s.rootAccessReport(),
 		}
 		socket.Emit(EventAgentAuth, authPayload)

@@ -138,6 +138,8 @@ type authEvent struct {
 	NodeID       string `json:"nodeId"`
 	AgentToken   string `json:"agentToken"`
 	AgentVersion string `json:"agentVersion,omitempty"`
+	PlatformVersion string `json:"platformVersion,omitempty"`
+	KernelVersion   string `json:"kernelVersion,omitempty"`
 	RootAccess   *api.RootAccessAgentReport `json:"rootAccess,omitempty"`
 }
 

@@ -15,6 +15,12 @@ Formatting rules:
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-04-04
+
+### Fixed
+
+- Realtime `agent.auth` now includes `platformVersion` and `kernelVersion`, allowing the control plane to refresh node platform/kernel metadata even when nodes rely on realtime reconnects instead of enrollment refresh.
+
 ## [1.0.5] - 2026-04-04
 
 ### Fixed

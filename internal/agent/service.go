@@ -14,6 +14,7 @@ import (
 	"github.com/noderax/noderax-agent/internal/metrics"
 	"github.com/noderax/noderax-agent/internal/realtime"
 	"github.com/noderax/noderax-agent/internal/rootaccess"
+	"github.com/noderax/noderax-agent/internal/system"
 	"github.com/noderax/noderax-agent/internal/tasks"
 	"github.com/noderax/noderax-agent/internal/terminal"
 )
@@ -157,6 +158,13 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 	}
 	if realtimeService != nil {
 		realtimeService.SetRuntimeAgentVersion(version)
+		hostInfo, hostInfoErr := system.HostInfo(context.Background())
+		if hostInfoErr != nil {
+			logger.Warn("failed to read host metadata for realtime auth", "error", hostInfoErr)
+		} else {
+			realtimeService.SetRuntimePlatformVersion(hostInfo.PlatformVersion)
+			realtimeService.SetRuntimeKernelVersion(hostInfo.KernelVersion)
+		}
 	}
 
 	var terminalEvents terminal.RealtimeEvents
