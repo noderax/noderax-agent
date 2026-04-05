@@ -67,7 +67,7 @@ func TestSelectShellFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("selectShell returned error: %v", err)
 	}
-	if !strings.HasPrefix(shell, "/bin/") {
+	if !strings.HasSuffix(shell, "/bash") && !strings.HasSuffix(shell, "/zsh") && !strings.HasSuffix(shell, "/sh") {
 		t.Fatalf("unexpected shell path: %q", shell)
 	}
 }
