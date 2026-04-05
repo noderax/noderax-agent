@@ -21,6 +21,7 @@ import (
 
 const (
 	TaskTypeAgentUpdate    = "agent.update"
+	TaskTypeLogScan        = "log.scan"
 	TaskTypeShellExec      = "shell.exec"
 	TaskTypePackageList    = "packageList"
 	TaskTypePackageSearch  = "packageSearch"
@@ -70,6 +71,13 @@ type agentUpdatePayload struct {
 	TargetVersion string `json:"targetVersion"`
 	TargetID      string `json:"targetId"`
 	Rollback      bool   `json:"rollback,omitempty"`
+}
+
+type logScanPayload struct {
+	Mode           string `json:"mode"`
+	SourcePresetID string `json:"sourcePresetId"`
+	RunAsRoot      bool   `json:"runAsRoot,omitempty"`
+	RootScope      string `json:"rootScope,omitempty"`
 }
 
 type ExecutionResult struct {
@@ -289,6 +297,8 @@ func (e *ShellExecutor) commandForTask(task api.Task) (commandSpec, error) {
 	switch task.Type {
 	case TaskTypeAgentUpdate:
 		return e.agentUpdateCommand(task.Payload)
+	case TaskTypeLogScan:
+		return e.logScanCommand(task.Payload)
 	case TaskTypeShellExec:
 		return e.shellCommand(task.Payload)
 	case TaskTypePackageList:
@@ -403,6 +413,75 @@ func (e *ShellExecutor) agentUpdateCommand(payload json.RawMessage) (commandSpec
 				"rollback":      parsed.Rollback,
 			}
 		},
+	}, nil
+}
+
+func (e *ShellExecutor) logScanCommand(payload json.RawMessage) (commandSpec, error) {
+	if err := e.ensureLinuxTaskSupport(); err != nil {
+		return commandSpec{}, err
+	}
+
+	var parsed logScanPayload
+	if err := decodePayload(payload, &parsed, TaskTypeLogScan); err != nil {
+		return commandSpec{}, err
+	}
+
+	if strings.TrimSpace(parsed.Mode) == "" {
+		return commandSpec{}, fmt.Errorf("%w: log.scan payload requires mode", ErrInvalidTaskPayload)
+	}
+	if strings.TrimSpace(parsed.SourcePresetID) == "" {
+		return commandSpec{}, fmt.Errorf("%w: log.scan payload requires sourcePresetId", ErrInvalidTaskPayload)
+	}
+
+	agentPath, err := e.lookPath("noderax-agent")
+	if err != nil {
+		agentPath, err = e.executablePath()
+		if err != nil {
+			return commandSpec{}, fmt.Errorf(
+				"%w: could not resolve the managed noderax-agent binary",
+				ErrUnsupportedExecutionEnvironment,
+			)
+		}
+	}
+
+	requestPath, err := writeJSONTempRequest("noderax-agent-log-scan-*.json", payload)
+	if err != nil {
+		return commandSpec{}, fmt.Errorf("%w: write log scan request: %v", ErrUnsupportedExecutionEnvironment, err)
+	}
+
+	commandName := agentPath
+	commandArgs := []string{"log-scan", "--request", requestPath}
+
+	if parsed.RunAsRoot {
+		if strings.TrimSpace(parsed.RootScope) == "" {
+			return commandSpec{}, fmt.Errorf("%w: log.scan root execution requires rootScope", ErrInvalidTaskPayload)
+		}
+		if parsed.RootScope != "task" {
+			return commandSpec{}, fmt.Errorf("%w: log.scan root execution requires task scope", ErrInvalidTaskPayload)
+		}
+		if e.rootScopeChecker != nil && !e.rootScopeChecker(parsed.RootScope) {
+			return commandSpec{}, fmt.Errorf("%w: current root access profile does not allow %s scope", ErrUnsupportedExecutionEnvironment, parsed.RootScope)
+		}
+
+		if e.goos == "linux" && e.fileExists(linuxTaskRootHelperPath) {
+			rootCommand := formatCommandForLog(commandName, commandArgs)
+			if err := writeTaskRootRequest(e.taskRootRequestPath, rootCommand); err != nil {
+				return commandSpec{}, fmt.Errorf("%w: write task root request: %v", ErrUnsupportedExecutionEnvironment, err)
+			}
+			commandName, commandArgs, err = e.wrapWithSudo(linuxTaskRootHelperPath, nil)
+		} else {
+			commandName, commandArgs, err = e.wrapWithSudo(commandName, commandArgs)
+		}
+		if err != nil {
+			return commandSpec{}, err
+		}
+	}
+
+	return commandSpec{
+		name:         commandName,
+		args:         commandArgs,
+		startMessage: fmt.Sprintf("running log.scan for preset %s via %s", parsed.SourcePresetID, commandName),
+		parseResult:  parseLogScanResult,
 	}, nil
 }
 
@@ -930,6 +1009,31 @@ func writeManagedUpdateRequest(path string, payload agentUpdatePayload) error {
 	return nil
 }
 
+func writeJSONTempRequest(pattern string, payload json.RawMessage) (string, error) {
+	file, err := os.CreateTemp("", pattern)
+	if err != nil {
+		return "", fmt.Errorf("create request file: %w", err)
+	}
+
+	tempPath := file.Name()
+	if _, err := file.Write(payload); err != nil {
+		file.Close()
+		_ = os.Remove(tempPath)
+		return "", fmt.Errorf("write request file: %w", err)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		file.Close()
+		_ = os.Remove(tempPath)
+		return "", fmt.Errorf("chmod request file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return "", fmt.Errorf("close request file: %w", err)
+	}
+
+	return tempPath, nil
+}
+
 func strconvQuote(value string) string {
 	escaped := strings.ReplaceAll(value, "\\", "\\\\")
 	escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
@@ -1131,6 +1235,22 @@ func parsePackageSearch(output string, onLog func(string, string)) any {
 	return map[string]any{
 		"results": results,
 	}
+}
+
+func parseLogScanResult(output string, onLog func(string, string)) any {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		emitLog(onLog, "system", "error: log.scan output is empty")
+		return nil
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		emitLog(onLog, "system", fmt.Sprintf("error: failed to parse log.scan JSON result: %v", err))
+		return nil
+	}
+
+	return parsed
 }
 
 func exitCode(err error) int {

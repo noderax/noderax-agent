@@ -129,6 +129,8 @@ func (c CLI) Handle(ctx context.Context, args []string) (bool, error) {
 	case "config":
 		brand.PrintLogo(c.stdoutOrDefault())
 		return true, c.Config(ctx, args[1:])
+	case "log-scan":
+		return true, c.LogScan(ctx, args[1:])
 	case "version", "--version", "-v":
 		return true, c.VersionInfo(args[1:])
 	default:

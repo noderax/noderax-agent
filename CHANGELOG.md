@@ -15,6 +15,19 @@ Formatting rules:
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-04-05
+
+### Added
+
+- Added a new `log.scan` task type with payload validation for `mode` and `sourcePresetId`, including optional root execution guarded by `task` scope checks.
+- Added `noderax-agent log-scan --request <path>` to execute log scan requests from a JSON file and return structured JSON results for task parsing.
+- Added a dedicated log scanning engine that supports preset sources (`syslog`, `auth.log`, `kern.log`, `noderax-agent`) with `preview` and `monitor` modes, source-aware cursor handling, and hard limits for lines, bytes, and backfill.
+
+### Fixed
+
+- Monitor-mode file scans now detect log rotation (inode change) and truncation (offset beyond file size), automatically reset the cursor, replay tail lines, and emit warning metadata for downstream diagnostics.
+- Log scan task result parsing now reports explicit system errors when command output is empty or invalid JSON, improving failure visibility in task logs.
+
 ## [1.0.5] - 2026-04-05
 
 ### Fixed
