@@ -17,16 +17,19 @@ import (
 )
 
 const linuxRootProfileHelperPath = "/usr/local/libexec/noderax-agent-root-profile"
+const rootAccessStateRevision = 1
 
 type state struct {
 	AppliedProfile api.RootAccessProfile `json:"appliedProfile"`
 	LastAppliedAt  string                `json:"lastAppliedAt,omitempty"`
 	LastError      string                `json:"lastError,omitempty"`
+	Revision       int                   `json:"revision,omitempty"`
 }
 
 type Manager struct {
 	logger    *slog.Logger
 	statePath string
+	applyFunc func(context.Context, api.RootAccessProfile) error
 
 	mu    sync.RWMutex
 	state state
@@ -38,8 +41,10 @@ func NewManager(identityStatePath string, logger *slog.Logger) *Manager {
 		statePath: buildStatePath(identityStatePath),
 		state: state{
 			AppliedProfile: api.RootAccessProfileOff,
+			Revision:       rootAccessStateRevision,
 		},
 	}
+	manager.applyFunc = manager.applyProfile
 	manager.load()
 	return manager
 }
@@ -67,11 +72,13 @@ func (m *Manager) HandleDesiredSnapshot(
 	current := m.state
 	m.mu.RUnlock()
 
-	if current.AppliedProfile == snapshot.Profile && strings.TrimSpace(current.LastError) == "" {
+	if current.AppliedProfile == snapshot.Profile &&
+		strings.TrimSpace(current.LastError) == "" &&
+		current.Revision >= rootAccessStateRevision {
 		return
 	}
 
-	if err := m.applyProfile(ctx, snapshot.Profile); err != nil {
+	if err := m.applyFunc(ctx, snapshot.Profile); err != nil {
 		m.logger.Warn(
 			"root access profile sync failed",
 			"profile",
@@ -181,6 +188,9 @@ func (m *Manager) load() {
 	if strings.TrimSpace(string(loaded.AppliedProfile)) == "" {
 		loaded.AppliedProfile = api.RootAccessProfileOff
 	}
+	if loaded.Revision < 0 {
+		loaded.Revision = 0
+	}
 
 	m.state = loaded
 }
@@ -195,6 +205,7 @@ func (m *Manager) updateState(mutator func(*state)) error {
 	if strings.TrimSpace(string(next.AppliedProfile)) == "" {
 		next.AppliedProfile = api.RootAccessProfileOff
 	}
+	next.Revision = rootAccessStateRevision
 
 	if err := os.MkdirAll(filepath.Dir(m.statePath), 0o755); err != nil {
 		return fmt.Errorf("create root access state directory: %w", err)

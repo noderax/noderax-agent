@@ -15,11 +15,6 @@ Formatting rules:
 
 ## [Unreleased]
 
-### Fixed
-
-- Task lifecycle log shipping now truncates oversized log lines to the API-safe limit and retries queued-state conflicts before failing, reducing cases where tasks appear stuck in `queued` without visible progress.
-- Root `log.scan` execution now normalizes legacy `task` scope requests to `operational` scope and uses a dedicated operational helper path, so log scan operations no longer depend on task-root grants.
-
 ## [1.0.6] - 2026-04-05
 
 ### Added
@@ -30,6 +25,9 @@ Formatting rules:
 
 ### Fixed
 
+- Task lifecycle log shipping now truncates oversized log lines to the API-safe limit and retries queued-state conflicts before failing, reducing cases where tasks appear stuck in `queued` without visible progress.
+- Root `log.scan` execution now normalizes legacy `task` scope requests to `operational` scope and uses a dedicated operational helper path, so log scan operations no longer depend on task-root grants.
+- Agents now re-apply an already-selected root access profile when older persisted state lacks the latest revision marker, allowing updated sudoers rules for operational log scan helpers to self-heal after upgrade.
 - Monitor-mode file scans now detect log rotation (inode change) and truncation (offset beyond file size), automatically reset the cursor, replay tail lines, and emit warning metadata for downstream diagnostics.
 - Log scan task result parsing now reports explicit system errors when command output is empty or invalid JSON, improving failure visibility in task logs.
 
