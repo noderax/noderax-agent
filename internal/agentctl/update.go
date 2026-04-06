@@ -322,6 +322,9 @@ func (c CLI) applyManagedUpdate(
 	if err := writePackageMutationHelper(spec); err != nil {
 		return fmt.Errorf("refresh package mutation helper: %w", err)
 	}
+	if err := writeOperationalLogScanHelper(spec); err != nil {
+		return fmt.Errorf("refresh operational log scan helper: %w", err)
+	}
 	if err := writeTaskRootHelper(spec); err != nil {
 		return fmt.Errorf("refresh task root helper: %w", err)
 	}

@@ -33,6 +33,8 @@ const (
 	linuxPrivilegedUpdateRequestPath = "/var/lib/noderax-agent/update-request.json"
 	linuxPackageMutationHelperPath   = "/usr/local/libexec/noderax-agent-package-mutation"
 	linuxPackageMutationRequestPath  = "/var/lib/noderax-agent/package-mutation-request.txt"
+	linuxOperationalLogScanHelperPath = "/usr/local/libexec/noderax-agent-operational-log-scan"
+	linuxOperationalLogScanRequestPath = "/var/lib/noderax-agent/operational-log-scan-request.json"
 	linuxTaskRootHelperPath          = "/usr/local/libexec/noderax-agent-task-root"
 	linuxTaskRootRequestPath         = "/var/lib/noderax-agent/task-root-request.txt"
 	linuxAgentServiceName            = "noderax-agent.service"
@@ -149,6 +151,7 @@ type ShellExecutor struct {
 	fileExists                  func(string) bool
 	privilegedUpdateRequestPath string
 	packageMutationRequestPath  string
+	operationalLogScanRequestPath string
 	taskRootRequestPath         string
 	newCommand                  func(context.Context, string, ...string) commandRunner
 	rootScopeChecker            func(string) bool
@@ -166,6 +169,7 @@ func NewShellExecutor(defaultTimeout time.Duration) *ShellExecutor {
 		},
 		privilegedUpdateRequestPath: linuxPrivilegedUpdateRequestPath,
 		packageMutationRequestPath:  linuxPackageMutationRequestPath,
+		operationalLogScanRequestPath: linuxOperationalLogScanRequestPath,
 		taskRootRequestPath:         linuxTaskRootRequestPath,
 		newCommand:                  newExecCommandRunner,
 	}
@@ -453,22 +457,22 @@ func (e *ShellExecutor) logScanCommand(payload json.RawMessage) (commandSpec, er
 	commandArgs := []string{"log-scan", "--request", requestPath}
 
 	if parsed.RunAsRoot {
-		if strings.TrimSpace(parsed.RootScope) == "" {
-			return commandSpec{}, fmt.Errorf("%w: log.scan root execution requires rootScope", ErrInvalidTaskPayload)
+		effectiveScope := strings.TrimSpace(parsed.RootScope)
+		if effectiveScope == "" || effectiveScope == "task" {
+			effectiveScope = "operational"
 		}
-		if parsed.RootScope != "task" {
-			return commandSpec{}, fmt.Errorf("%w: log.scan root execution requires task scope", ErrInvalidTaskPayload)
+		if effectiveScope != "operational" {
+			return commandSpec{}, fmt.Errorf("%w: log.scan root execution requires operational scope", ErrInvalidTaskPayload)
 		}
-		if e.rootScopeChecker != nil && !e.rootScopeChecker(parsed.RootScope) {
-			return commandSpec{}, fmt.Errorf("%w: current root access profile does not allow %s scope", ErrUnsupportedExecutionEnvironment, parsed.RootScope)
+		if e.rootScopeChecker != nil && !e.rootScopeChecker(effectiveScope) {
+			return commandSpec{}, fmt.Errorf("%w: current root access profile does not allow %s scope", ErrUnsupportedExecutionEnvironment, effectiveScope)
 		}
 
-		if e.goos == "linux" && e.fileExists(linuxTaskRootHelperPath) {
-			rootCommand := formatCommandForLog(commandName, commandArgs)
-			if err := writeTaskRootRequest(e.taskRootRequestPath, rootCommand); err != nil {
-				return commandSpec{}, fmt.Errorf("%w: write task root request: %v", ErrUnsupportedExecutionEnvironment, err)
+		if e.goos == "linux" && e.fileExists(linuxOperationalLogScanHelperPath) {
+			if err := writeOperationalLogScanRequest(e.operationalLogScanRequestPath, payload); err != nil {
+				return commandSpec{}, fmt.Errorf("%w: write operational log scan request: %v", ErrUnsupportedExecutionEnvironment, err)
 			}
-			commandName, commandArgs, err = e.wrapWithSudo(linuxTaskRootHelperPath, nil)
+			commandName, commandArgs, err = e.wrapWithSudo(linuxOperationalLogScanHelperPath, nil)
 		} else {
 			commandName, commandArgs, err = e.wrapWithSudo(commandName, commandArgs)
 		}
@@ -963,6 +967,45 @@ func writeTaskRootRequest(path string, command string) error {
 	if err := os.Rename(tempPath, cleanPath); err != nil {
 		_ = os.Remove(tempPath)
 		return fmt.Errorf("replace task root request file: %w", err)
+	}
+
+	return nil
+}
+
+func writeOperationalLogScanRequest(path string, payload json.RawMessage) error {
+	cleanPath := filepath.Clean(strings.TrimSpace(path))
+	if cleanPath == "" {
+		return fmt.Errorf("request path is empty")
+	}
+
+	if err := os.MkdirAll(filepath.Dir(cleanPath), 0o755); err != nil {
+		return fmt.Errorf("create operational log scan request directory: %w", err)
+	}
+
+	file, err := os.CreateTemp(filepath.Dir(cleanPath), ".noderax-agent-operational-log-scan-*.json")
+	if err != nil {
+		return fmt.Errorf("create operational log scan request file: %w", err)
+	}
+
+	tempPath := file.Name()
+	if _, err := file.Write(payload); err != nil {
+		file.Close()
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("write operational log scan request file: %w", err)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		file.Close()
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("chmod operational log scan request file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("close operational log scan request file: %w", err)
+	}
+
+	if err := os.Rename(tempPath, cleanPath); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("replace operational log scan request file: %w", err)
 	}
 
 	return nil

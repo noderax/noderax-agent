@@ -33,9 +33,11 @@ const (
 	linuxPrivilegedUpdateHelperPath  = "/usr/local/libexec/noderax-agent-self-update"
 	linuxRootProfileHelperPath       = "/usr/local/libexec/noderax-agent-root-profile"
 	linuxPackageMutationHelperPath   = "/usr/local/libexec/noderax-agent-package-mutation"
+	linuxOperationalLogScanHelperPath = "/usr/local/libexec/noderax-agent-operational-log-scan"
 	linuxTaskRootHelperPath          = "/usr/local/libexec/noderax-agent-task-root"
 	linuxPrivilegedUpdateRequestPath = linuxServiceHome + "/update-request.json"
 	linuxPackageMutationRequestPath  = linuxServiceHome + "/package-mutation-request.txt"
+	linuxOperationalLogScanRequestPath = linuxServiceHome + "/operational-log-scan-request.json"
 	linuxTaskRootRequestPath         = linuxServiceHome + "/task-root-request.txt"
 	linuxConfigPath                  = "/etc/noderax-agent/config.json"
 	linuxStatePath                   = "/var/lib/noderax-agent/agent_identity.json"
@@ -63,6 +65,7 @@ type platformSpec struct {
 	PrivilegedUpdateHelperPath string
 	RootProfileHelperPath      string
 	PackageMutationHelperPath  string
+	OperationalLogScanHelperPath string
 	TaskRootHelperPath         string
 	BaseSudoersPath            string
 	RootAccessSudoersPath      string
@@ -247,6 +250,9 @@ func (c CLI) Install(ctx context.Context, args []string) error {
 	if err := writePackageMutationHelper(spec); err != nil {
 		return fmt.Errorf("write package mutation helper: %w", err)
 	}
+	if err := writeOperationalLogScanHelper(spec); err != nil {
+		return fmt.Errorf("write operational log scan helper: %w", err)
+	}
 	if err := writeTaskRootHelper(spec); err != nil {
 		return fmt.Errorf("write task root helper: %w", err)
 	}
@@ -424,6 +430,18 @@ func (c CLI) Uninstall(ctx context.Context) error {
 		"package mutation helper",
 		spec.PackageMutationHelperPath,
 		packageMutationHelperRemoved,
+	)
+
+	operationalLogScanHelperRemoved, err := removeFileIfExists(spec.OperationalLogScanHelperPath)
+	if err != nil {
+		return err
+	}
+	recordRemovalResult(
+		&removed,
+		&missing,
+		"operational log scan helper",
+		spec.OperationalLogScanHelperPath,
+		operationalLogScanHelperRemoved,
 	)
 
 	taskRootHelperRemoved, err := removeFileIfExists(spec.TaskRootHelperPath)
@@ -615,6 +633,7 @@ func currentPlatformSpec() (platformSpec, error) {
 			PrivilegedUpdateHelperPath: linuxPrivilegedUpdateHelperPath,
 			RootProfileHelperPath:      linuxRootProfileHelperPath,
 			PackageMutationHelperPath:  linuxPackageMutationHelperPath,
+			OperationalLogScanHelperPath: linuxOperationalLogScanHelperPath,
 			TaskRootHelperPath:         linuxTaskRootHelperPath,
 			BaseSudoersPath:            linuxBaseSudoersPath,
 			RootAccessSudoersPath:      linuxRootAccessSudoersPath,
@@ -638,6 +657,7 @@ func currentPlatformSpec() (platformSpec, error) {
 			PrivilegedUpdateHelperPath: "",
 			RootProfileHelperPath:      "",
 			PackageMutationHelperPath:  "",
+			OperationalLogScanHelperPath: "",
 			TaskRootHelperPath:         "",
 			BaseSudoersPath:            "",
 			RootAccessSudoersPath:      "",
@@ -1223,6 +1243,24 @@ func writePackageMutationHelper(spec platformSpec) error {
 	return nil
 }
 
+func writeOperationalLogScanHelper(spec platformSpec) error {
+	path := strings.TrimSpace(spec.OperationalLogScanHelperPath)
+	if path == "" {
+		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create helper directory for %s: %w", path, err)
+	}
+
+	content := renderOperationalLogScanHelper(spec)
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		return fmt.Errorf("write helper %s: %w", path, err)
+	}
+
+	return nil
+}
+
 func writeTaskRootHelper(spec platformSpec) error {
 	path := strings.TrimSpace(spec.TaskRootHelperPath)
 	if path == "" {
@@ -1414,6 +1452,28 @@ esac
 `, spec.PackageMutationHelperPath, linuxPackageMutationRequestPath)
 }
 
+func renderOperationalLogScanHelper(spec platformSpec) string {
+	return fmt.Sprintf(`#!/bin/sh
+set -eu
+
+HELPER_PATH=%q
+REQUEST_FILE=%q
+AGENT_BINARY=%q
+
+if [ "$#" -ne 0 ]; then
+	echo "usage: ${HELPER_PATH}" >&2
+	exit 64
+fi
+
+if [ ! -f "${REQUEST_FILE}" ]; then
+	echo "operational log scan request file is missing" >&2
+	exit 1
+fi
+
+exec "${AGENT_BINARY}" log-scan --request "${REQUEST_FILE}"
+`, spec.OperationalLogScanHelperPath, linuxOperationalLogScanRequestPath, spec.BinaryPath)
+}
+
 func renderTaskRootHelper(spec platformSpec) string {
 	return fmt.Sprintf(`#!/bin/sh
 set -eu
@@ -1483,6 +1543,7 @@ SERVICE_USER=%q
 SERVICE_NAME=%q
 SUDOERS_FILE=%q
 PACKAGE_MUTATION_HELPER=%q
+OPERATIONAL_LOG_SCAN_HELPER=%q
 TASK_ROOT_HELPER=%q
 
 if [ "$#" -ne 2 ] || [ "$1" != "apply" ]; then
@@ -1528,6 +1589,11 @@ append_operational_profile() {
 		append_line "Cmnd_Alias NODERAX_AGENT_PACKAGE_MUTATIONS = ${PACKAGE_MUTATION_HELPER}"
     append_alias "NODERAX_AGENT_PACKAGE_MUTATIONS"
   fi
+
+	if [ -x "${OPERATIONAL_LOG_SCAN_HELPER}" ]; then
+		append_line "Cmnd_Alias NODERAX_AGENT_OPERATIONAL_LOG_SCAN = ${OPERATIONAL_LOG_SCAN_HELPER}"
+		append_alias "NODERAX_AGENT_OPERATIONAL_LOG_SCAN"
+	fi
 
   if [ -n "${SYSTEMCTL_PATH}" ]; then
     append_line "Cmnd_Alias NODERAX_AGENT_SERVICE_CONTROL = ${SYSTEMCTL_PATH} restart ${SERVICE_NAME}, ${SYSTEMCTL_PATH} restart ${SERVICE_NAME%%.service}"
@@ -1628,7 +1694,7 @@ if command -v visudo >/dev/null 2>&1; then
 fi
 
 install -o root -g root -m 0440 "${TMP_FILE}" "${SUDOERS_FILE}"
-`, spec.RootProfileHelperPath, spec.ServiceUser, spec.ServiceName, spec.RootAccessSudoersPath, spec.PackageMutationHelperPath, spec.TaskRootHelperPath)
+`, spec.RootProfileHelperPath, spec.ServiceUser, spec.ServiceName, spec.RootAccessSudoersPath, spec.PackageMutationHelperPath, spec.OperationalLogScanHelperPath, spec.TaskRootHelperPath)
 }
 
 func writeServiceUnit(path, content string) error {

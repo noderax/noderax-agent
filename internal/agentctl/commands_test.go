@@ -135,6 +135,7 @@ func TestRenderRootProfileHelperSupportsCombinedProfiles(t *testing.T) {
 		ServiceName:               "noderax-agent.service",
 		RootAccessSudoersPath:     "/etc/sudoers.d/noderax-agent-root-access",
 		PackageMutationHelperPath: "/usr/local/libexec/noderax-agent-package-mutation",
+		OperationalLogScanHelperPath: "/usr/local/libexec/noderax-agent-operational-log-scan",
 		TaskRootHelperPath:        "/usr/local/libexec/noderax-agent-task-root",
 	}
 
@@ -146,6 +147,8 @@ func TestRenderRootProfileHelperSupportsCombinedProfiles(t *testing.T) {
 		"operational_terminal)",
 		"task_terminal)",
 		"append_operational_profile",
+		"NODERAX_AGENT_OPERATIONAL_LOG_SCAN",
+		"/usr/local/libexec/noderax-agent-operational-log-scan",
 		"append_task_profile",
 		"append_terminal_profile",
 		"for shell_name in bash zsh sh; do",

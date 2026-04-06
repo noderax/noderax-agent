@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -471,6 +472,99 @@ func TestShellExecutorExecutePropagatesExitCodeAndLogs(t *testing.T) {
 	}
 	if !containsLog(logs, "system:command finished with exit code 7") {
 		t.Fatalf("expected completion log, got %v", logs)
+	}
+}
+
+func TestShellExecutorLogScanRootUsesOperationalScopeAndHelper(t *testing.T) {
+	t.Parallel()
+
+	executor := NewShellExecutor(5 * time.Minute)
+	executor.goos = "linux"
+	executor.lookPath = fakeLookPath(map[string]string{
+		"noderax-agent": "/usr/local/bin/noderax-agent",
+		"sudo":          "/usr/bin/sudo",
+	})
+
+	requestPath := filepath.Join(t.TempDir(), "operational-log-scan-request.json")
+	executor.operationalLogScanRequestPath = requestPath
+	executor.fileExists = func(path string) bool {
+		return path == linuxOperationalLogScanHelperPath
+	}
+
+	checkedScope := ""
+	executor.SetRootScopeChecker(func(scope string) bool {
+		checkedScope = scope
+		return scope == "operational"
+	})
+
+	recorder := &recordingCommandFactory{
+		runner: &fakeCommandRunner{stdoutText: "{}\n"},
+	}
+	executor.newCommand = recorder.factory
+
+	_, err := executor.Execute(context.Background(), api.Task{
+		Type: TaskTypeLogScan,
+		Payload: mustJSON(t, map[string]any{
+			"mode":           "preview",
+			"sourcePresetId": "auth.log",
+			"runAsRoot":      true,
+			"rootScope":      "task",
+		}),
+	}, nil)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	if checkedScope != "operational" {
+		t.Fatalf("expected root scope checker to receive operational, got %q", checkedScope)
+	}
+
+	if recorder.name != "/usr/bin/sudo" {
+		t.Fatalf("command name mismatch: got %q want %q", recorder.name, "/usr/bin/sudo")
+	}
+
+	wantArgs := []string{"-n", linuxOperationalLogScanHelperPath}
+	if !reflect.DeepEqual(recorder.args, wantArgs) {
+		t.Fatalf("command args mismatch: got %v want %v", recorder.args, wantArgs)
+	}
+
+	requestBytes, err := os.ReadFile(requestPath)
+	if err != nil {
+		t.Fatalf("read operational request file: %v", err)
+	}
+	if !strings.Contains(string(requestBytes), `"sourcePresetId":"auth.log"`) {
+		t.Fatalf("unexpected request payload: %s", string(requestBytes))
+	}
+}
+
+func TestShellExecutorLogScanRootRejectsNonOperationalScope(t *testing.T) {
+	t.Parallel()
+
+	executor := NewShellExecutor(5 * time.Minute)
+	executor.goos = "linux"
+	executor.lookPath = fakeLookPath(map[string]string{
+		"noderax-agent": "/usr/local/bin/noderax-agent",
+		"sudo":          "/usr/bin/sudo",
+	})
+
+	recorder := &recordingCommandFactory{runner: &fakeCommandRunner{}}
+	executor.newCommand = recorder.factory
+
+	_, err := executor.Execute(context.Background(), api.Task{
+		Type: TaskTypeLogScan,
+		Payload: mustJSON(t, map[string]any{
+			"mode":           "preview",
+			"sourcePresetId": "auth.log",
+			"runAsRoot":      true,
+			"rootScope":      "terminal",
+		}),
+	}, nil)
+
+	if !errors.Is(err, ErrInvalidTaskPayload) {
+		t.Fatalf("expected ErrInvalidTaskPayload, got %v", err)
+	}
+	if recorder.calls != 0 {
+		t.Fatalf("expected no command execution, got %d calls", recorder.calls)
 	}
 }
 
