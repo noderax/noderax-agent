@@ -2,7 +2,10 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"os"
 	"net/url"
 	"strings"
 	"time"
@@ -38,7 +41,7 @@ func (e *RequestError) Error() string {
 	return fmt.Sprintf("%s %s: status=%d message=%s", strings.ToUpper(e.Method), e.Path, e.StatusCode, message)
 }
 
-func NewClient(baseURL string, timeout time.Duration) *Client {
+func NewClient(baseURL string, timeout time.Duration, tlsCAFile string) (*Client, error) {
 	httpClient := resty.New().
 		SetBaseURL(strings.TrimRight(baseURL, "/")).
 		SetTimeout(timeout).
@@ -55,7 +58,27 @@ func NewClient(baseURL string, timeout time.Duration) *Client {
 			return response.StatusCode() == 429 || response.StatusCode() >= 500
 		})
 
-	return &Client{http: httpClient}
+	rootCAs, err := x509.SystemCertPool()
+	if err != nil || rootCAs == nil {
+		rootCAs = x509.NewCertPool()
+	}
+
+	if strings.TrimSpace(tlsCAFile) != "" {
+		pemBytes, readErr := os.ReadFile(strings.TrimSpace(tlsCAFile))
+		if readErr != nil {
+			return nil, fmt.Errorf("read API TLS CA file %s: %w", strings.TrimSpace(tlsCAFile), readErr)
+		}
+		if ok := rootCAs.AppendCertsFromPEM(pemBytes); !ok {
+			return nil, fmt.Errorf("parse API TLS CA file %s: no certificates found", strings.TrimSpace(tlsCAFile))
+		}
+	}
+
+	httpClient.SetTLSClientConfig(&tls.Config{
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    rootCAs,
+	})
+
+	return &Client{http: httpClient}, nil
 }
 
 func (c *Client) SetAgentToken(token string) {

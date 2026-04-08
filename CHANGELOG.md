@@ -15,6 +15,21 @@ Formatting rules:
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-04-08
+
+### Added
+
+- Added support for custom API TLS trust roots through `api_tls_ca_file` in config files and `NODERAX_API_TLS_CA_FILE` / `API_TLS_CA_FILE` environment overrides.
+
+### Changed
+
+- Changed API client construction to initialize with system CA roots plus optional custom CA bundle loading, and enforced TLS `minVersion` at TLS 1.2 for outbound API requests.
+- Changed enrollment and managed update code paths to use error-returning API client initialization so TLS CA configuration issues are surfaced before network operations start.
+
+### Fixed
+
+- Fixed startup, install, bootstrap, and managed update flows to fail fast with explicit `configure API client` errors when API TLS CA files are unreadable or invalid.
+
 ## [1.0.6] - 2026-04-05
 
 ### Added

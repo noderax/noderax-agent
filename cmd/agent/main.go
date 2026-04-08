@@ -53,7 +53,11 @@ func main() {
 	log := logger.New(cfg.LogLevel)
 	log.Info("starting noderax agent", "version", version, "commit", commit, "build_date", buildDate)
 
-	client := api.NewClient(cfg.APIURL, cfg.RequestTimeout)
+	client, err := api.NewClient(cfg.APIURL, cfg.RequestTimeout, cfg.APITLSCAFile)
+	if err != nil {
+		log.Error("configure API client", "error", err)
+		os.Exit(1)
+	}
 	if cfg.AgentToken != "" {
 		client.SetAgentToken(cfg.AgentToken)
 	}

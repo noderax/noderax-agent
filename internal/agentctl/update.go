@@ -238,7 +238,10 @@ func (c CLI) applyManagedUpdate(
 		return fmt.Errorf("managed agent identity is missing; self-update requires a registered node id and agent token")
 	}
 
-	client := api.NewClient(cfg.APIURL, cfg.RequestTimeout)
+	client, err := api.NewClient(cfg.APIURL, cfg.RequestTimeout, cfg.APITLSCAFile)
+	if err != nil {
+		return fmt.Errorf("configure API client: %w", err)
+	}
 	client.SetAgentNodeID(cfg.NodeID)
 	client.SetAgentToken(cfg.AgentToken)
 
@@ -386,7 +389,10 @@ func (c CLI) reportManagedUpdateProgress(
 		return fmt.Errorf("managed agent identity is missing")
 	}
 
-	client := api.NewClient(cfg.APIURL, cfg.RequestTimeout)
+	client, err := api.NewClient(cfg.APIURL, cfg.RequestTimeout, cfg.APITLSCAFile)
+	if err != nil {
+		return fmt.Errorf("configure API client: %w", err)
+	}
 	client.SetAgentNodeID(cfg.NodeID)
 	client.SetAgentToken(cfg.AgentToken)
 

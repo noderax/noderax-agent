@@ -29,6 +29,7 @@ const (
 
 type Config struct {
 	APIURL                string
+	APITLSCAFile          string
 	EnrollmentToken       string
 	NodeID                string
 	AgentToken            string
@@ -51,6 +52,7 @@ type Config struct {
 
 type fileConfig struct {
 	APIURL                string   `json:"api_url"`
+	APITLSCAFile          string   `json:"api_tls_ca_file,omitempty"`
 	EnrollmentToken       string   `json:"enrollment_token"`
 	NodeID                string   `json:"node_id"`
 	AgentToken            string   `json:"agent_token"`
@@ -138,6 +140,7 @@ func SaveFile(path string, cfg Config) error {
 	realtimeBackoffJitter := cfg.RealtimeBackoffJitter
 	raw := fileConfig{
 		APIURL:                cfg.APIURL,
+		APITLSCAFile:          cfg.APITLSCAFile,
 		EnrollmentToken:       cfg.EnrollmentToken,
 		NodeID:                cfg.NodeID,
 		AgentToken:            cfg.AgentToken,
@@ -195,6 +198,11 @@ func (c Config) Validate() error {
 	}
 	if parsedURL.Host == "" {
 		return fmt.Errorf("API_URL must include a host, got %q", c.APIURL)
+	}
+	if strings.TrimSpace(c.APITLSCAFile) != "" {
+		if _, err := os.Stat(c.APITLSCAFile); err != nil {
+			return fmt.Errorf("API_TLS_CA_FILE is invalid: %w", err)
+		}
 	}
 	if c.HeartbeatInterval <= 0 {
 		return fmt.Errorf("HEARTBEAT_INTERVAL must be greater than zero")
@@ -281,6 +289,9 @@ func mergeConfigFile(cfg *Config, path string) error {
 	if raw.APIURL != "" {
 		cfg.APIURL = strings.TrimSpace(raw.APIURL)
 	}
+	if raw.APITLSCAFile != "" {
+		cfg.APITLSCAFile = filepath.Clean(strings.TrimSpace(raw.APITLSCAFile))
+	}
 	if raw.EnrollmentToken != "" {
 		cfg.EnrollmentToken = raw.EnrollmentToken
 	}
@@ -339,6 +350,7 @@ func mergeConfigFile(cfg *Config, path string) error {
 
 func mergeEnv(cfg *Config) error {
 	overrideStringAny(&cfg.APIURL, "NODERAX_API_URL", "API_URL")
+	overrideStringAny(&cfg.APITLSCAFile, "NODERAX_API_TLS_CA_FILE", "API_TLS_CA_FILE")
 	overrideString(&cfg.EnrollmentToken, "ENROLLMENT_TOKEN")
 	overrideString(&cfg.NodeID, "NODE_ID")
 	overrideString(&cfg.AgentToken, "AGENT_TOKEN")
@@ -380,6 +392,9 @@ func mergeEnv(cfg *Config) error {
 
 	if cfg.StateFile != "" {
 		cfg.StateFile = filepath.Clean(cfg.StateFile)
+	}
+	if cfg.APITLSCAFile != "" {
+		cfg.APITLSCAFile = filepath.Clean(cfg.APITLSCAFile)
 	}
 	if cfg.RealtimeNamespace != "" && !strings.HasPrefix(cfg.RealtimeNamespace, "/") {
 		cfg.RealtimeNamespace = "/" + cfg.RealtimeNamespace

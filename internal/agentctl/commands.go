@@ -281,7 +281,10 @@ func (c CLI) Install(ctx context.Context, args []string) error {
 			return err
 		}
 	} else {
-		client := api.NewClient(cfg.APIURL, cfg.RequestTimeout)
+		client, err := api.NewClient(cfg.APIURL, cfg.RequestTimeout, cfg.APITLSCAFile)
+		if err != nil {
+			return fmt.Errorf("configure API client: %w", err)
+		}
 		if err := agent.RunInteractiveEnrollment(ctx, cfg, client, c.Logger, c.Version, c.stdinOrDefault(), c.stdoutOrDefault()); err != nil {
 			return err
 		}
@@ -334,7 +337,10 @@ func (c CLI) Bootstrap(ctx context.Context, args []string) error {
 		}
 	}
 
-	client := api.NewClient(cfg.APIURL, cfg.RequestTimeout)
+	client, err := api.NewClient(cfg.APIURL, cfg.RequestTimeout, cfg.APITLSCAFile)
+	if err != nil {
+		return fmt.Errorf("configure API client: %w", err)
+	}
 	_, err = agent.RunBootstrapEnrollment(
 		ctx,
 		cfg,
@@ -1796,8 +1802,11 @@ func promptValue(reader *bufio.Reader, writer io.Writer, label, defaultValue str
 
 func (c CLI) bootstrapManagedInstall(ctx context.Context, spec platformSpec, cfg config.Config) error {
 	if strings.TrimSpace(spec.ServiceUser) == "" {
-		client := api.NewClient(cfg.APIURL, cfg.RequestTimeout)
-		_, err := agent.RunBootstrapEnrollment(
+		client, err := api.NewClient(cfg.APIURL, cfg.RequestTimeout, cfg.APITLSCAFile)
+		if err != nil {
+			return fmt.Errorf("configure API client: %w", err)
+		}
+		_, err = agent.RunBootstrapEnrollment(
 			ctx,
 			cfg,
 			client,
