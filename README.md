@@ -152,6 +152,9 @@ Supported profiles:
 - `operational`
 - `task`
 - `terminal`
+- `operational_task`
+- `operational_terminal`
+- `task_terminal`
 - `all`
 
 Profile behavior:
@@ -159,7 +162,10 @@ Profile behavior:
 - `operational`: package mutations, `apt-get update`, service restart, and reboot
 - `task`: `shell.exec` and scheduled shell tasks can run with `runAsRoot=true`
 - `terminal`: interactive terminal sessions can start as root
-- `all`: union of the three surfaces
+- `operational_task`: union of operational + task
+- `operational_terminal`: union of operational + terminal
+- `task_terminal`: union of task + terminal
+- `all`: union of all three surfaces
 
 ## Non-Interactive Bootstrap From A Local Binary
 
