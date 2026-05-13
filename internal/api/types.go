@@ -30,14 +30,15 @@ type RootAccessAgentReport struct {
 }
 
 type RegisterRequest struct {
-	EnrollmentToken string `json:"enrollmentToken,omitempty"`
-	Hostname        string `json:"hostname"`
-	OperatingSystem string `json:"operatingSystem"`
-	Platform        string `json:"platform,omitempty"`
-	PlatformVersion string `json:"platformVersion,omitempty"`
-	KernelVersion   string `json:"kernelVersion,omitempty"`
-	Architecture    string `json:"architecture"`
-	AgentVersion    string `json:"agentVersion"`
+	EnrollmentToken string        `json:"enrollmentToken,omitempty"`
+	Hostname        string        `json:"hostname"`
+	OperatingSystem string        `json:"operatingSystem"`
+	Platform        string        `json:"platform,omitempty"`
+	PlatformVersion string        `json:"platformVersion,omitempty"`
+	KernelVersion   string        `json:"kernelVersion,omitempty"`
+	Architecture    string        `json:"architecture"`
+	AgentVersion    string        `json:"agentVersion"`
+	Location        *NodeLocation `json:"location,omitempty"`
 }
 
 type RegisterResponse struct {
@@ -46,11 +47,19 @@ type RegisterResponse struct {
 }
 
 type EnrollmentAdditionalInfo struct {
-	OS              string `json:"os,omitempty"`
-	Arch            string `json:"arch,omitempty"`
-	AgentVersion    string `json:"agentVersion,omitempty"`
-	PlatformVersion string `json:"platformVersion,omitempty"`
-	KernelVersion   string `json:"kernelVersion,omitempty"`
+	OS              string        `json:"os,omitempty"`
+	Arch            string        `json:"arch,omitempty"`
+	AgentVersion    string        `json:"agentVersion,omitempty"`
+	PlatformVersion string        `json:"platformVersion,omitempty"`
+	KernelVersion   string        `json:"kernelVersion,omitempty"`
+	Location        *NodeLocation `json:"location,omitempty"`
+}
+
+type NodeLocation struct {
+	Provider string `json:"provider"`
+	Source   string `json:"source"`
+	Region   string `json:"region"`
+	Zone     string `json:"zone,omitempty"`
 }
 
 type InitiateEnrollmentRequest struct {

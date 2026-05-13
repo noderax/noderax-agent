@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/noderax/noderax-agent/internal/api"
+	"github.com/noderax/noderax-agent/internal/cloudmetadata"
 	"github.com/noderax/noderax-agent/internal/config"
 	"github.com/noderax/noderax-agent/internal/metrics"
 	"github.com/noderax/noderax-agent/internal/realtime"
@@ -158,6 +159,17 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 	}
 	if realtimeService != nil {
 		realtimeService.SetRuntimeAgentVersion(version)
+		if location, locationErr := cloudmetadata.Detect(context.Background()); locationErr != nil {
+			logger.Debug("cloud metadata location detection skipped", "error", locationErr)
+		} else if location != nil {
+			realtimeService.SetRuntimeLocation(location)
+			logger.Info(
+				"cloud metadata location detected",
+				"provider", location.Provider,
+				"region", location.Region,
+				"zone", location.Zone,
+			)
+		}
 		hostInfo, hostInfoErr := system.HostInfo(context.Background())
 		if hostInfoErr != nil {
 			logger.Warn("failed to read host metadata for realtime auth", "error", hostInfoErr)

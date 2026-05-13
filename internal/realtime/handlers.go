@@ -142,6 +142,7 @@ type authEvent struct {
 	PlatformVersion string                     `json:"platformVersion,omitempty"`
 	KernelVersion   string                     `json:"kernelVersion,omitempty"`
 	RootAccess      *api.RootAccessAgentReport `json:"rootAccess,omitempty"`
+	Location        *api.NodeLocation          `json:"location,omitempty"`
 }
 
 type pingEvent struct {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/noderax/noderax-agent/internal/api"
+	"github.com/noderax/noderax-agent/internal/cloudmetadata"
 	"github.com/noderax/noderax-agent/internal/config"
 	"github.com/noderax/noderax-agent/internal/system"
 )
@@ -69,13 +70,14 @@ func RunInteractiveEnrollment(
 		return err
 	}
 
-	requestCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
-	defer cancel()
-
 	operatingSystem := hostInfo.Platform
 	if strings.TrimSpace(operatingSystem) == "" {
 		operatingSystem = hostInfo.OS
 	}
+	location := detectCloudLocation(ctx, logger)
+
+	requestCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
+	defer cancel()
 
 	response, err := client.InitiateEnrollment(requestCtx, api.InitiateEnrollmentRequest{
 		Email:    email,
@@ -86,6 +88,7 @@ func RunInteractiveEnrollment(
 			AgentVersion:    version,
 			PlatformVersion: hostInfo.PlatformVersion,
 			KernelVersion:   hostInfo.KernelVersion,
+			Location:        location,
 		},
 	})
 	if err != nil {
@@ -146,13 +149,14 @@ func RunBootstrapEnrollment(
 		logger.Warn("host info collection returned partial data", "error", err)
 	}
 
-	requestCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
-	defer cancel()
-
 	operatingSystem := hostInfo.Platform
 	if strings.TrimSpace(operatingSystem) == "" {
 		operatingSystem = hostInfo.OS
 	}
+	location := detectCloudLocation(ctx, logger)
+
+	requestCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
+	defer cancel()
 
 	response, err := client.ConsumeNodeInstall(requestCtx, api.ConsumeNodeInstallRequest{
 		Token:    strings.TrimSpace(token),
@@ -163,6 +167,7 @@ func RunBootstrapEnrollment(
 			AgentVersion:    version,
 			PlatformVersion: hostInfo.PlatformVersion,
 			KernelVersion:   hostInfo.KernelVersion,
+			Location:        location,
 		},
 	})
 	if err != nil {
@@ -323,6 +328,25 @@ func persistIdentity(
 	}
 
 	return nil
+}
+
+var detectCloudLocation = func(ctx context.Context, logger *slog.Logger) *api.NodeLocation {
+	location, err := cloudmetadata.Detect(ctx)
+	if err != nil {
+		if logger != nil {
+			logger.Debug("cloud metadata location detection skipped", "error", err)
+		}
+		return nil
+	}
+	if location != nil && logger != nil {
+		logger.Info(
+			"cloud metadata location detected",
+			"provider", location.Provider,
+			"region", location.Region,
+			"zone", location.Zone,
+		)
+	}
+	return location
 }
 
 func promptValue(reader *bufio.Reader, output io.Writer, label string, required bool) (string, error) {

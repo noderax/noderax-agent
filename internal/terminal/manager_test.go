@@ -108,6 +108,14 @@ func TestNormalizeSizeDefaults(t *testing.T) {
 }
 
 func TestTerminalLifecycle(t *testing.T) {
+	originalShell := os.Getenv("SHELL")
+	t.Cleanup(func() {
+		_ = os.Setenv("SHELL", originalShell)
+	})
+	if _, err := os.Stat("/bin/sh"); err == nil {
+		_ = os.Setenv("SHELL", "/bin/sh")
+	}
+
 	recorder := &eventRecorder{}
 	manager := NewManager(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),

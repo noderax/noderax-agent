@@ -144,6 +144,12 @@ func TestRealtimeConnectAuthDispatchLifecycle(t *testing.T) {
 		t.Fatalf("NewService() error = %v", err)
 	}
 	svc.SetRuntimeAgentVersion("1.0.0")
+	svc.SetRuntimeLocation(&api.NodeLocation{
+		Provider: "aws",
+		Source:   "cloud_metadata",
+		Region:   "eu-central-1",
+		Zone:     "eu-central-1a",
+	})
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -158,6 +164,9 @@ func TestRealtimeConnectAuthDispatchLifecycle(t *testing.T) {
 		}
 		if auth.AgentVersion != "1.0.0" {
 			t.Fatalf("unexpected auth payload: %+v", auth)
+		}
+		if auth.Location == nil || auth.Location.Region != "eu-central-1" {
+			t.Fatalf("expected auth location payload, got %+v", auth.Location)
 		}
 	case <-time.After(8 * time.Second):
 		t.Fatalf("timed out waiting for auth event")

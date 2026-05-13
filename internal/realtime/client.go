@@ -59,6 +59,7 @@ type Service struct {
 	runtimeAgentVersion    string
 	runtimePlatformVersion string
 	runtimeKernelVersion   string
+	runtimeLocation        *api.NodeLocation
 	outbound               chan any
 
 	reconnects      atomic.Int64
@@ -393,6 +394,10 @@ func (s *Service) SetRuntimeKernelVersion(version string) {
 	s.runtimeKernelVersion = strings.TrimSpace(version)
 }
 
+func (s *Service) SetRuntimeLocation(location *api.NodeLocation) {
+	s.runtimeLocation = location
+}
+
 func (s *Service) SnapshotStats() Stats {
 	return Stats{
 		Reconnects:      s.reconnects.Load(),
@@ -539,6 +544,7 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 			PlatformVersion: s.runtimePlatformVersion,
 			KernelVersion:   s.runtimeKernelVersion,
 			RootAccess:      s.rootAccessReport(),
+			Location:        s.runtimeLocation,
 		}
 		socket.Emit(EventAgentAuth, authPayload)
 	})
@@ -591,6 +597,7 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 			PlatformVersion: s.runtimePlatformVersion,
 			KernelVersion:   s.runtimeKernelVersion,
 			RootAccess:      s.rootAccessReport(),
+			Location:        s.runtimeLocation,
 		})
 	})
 

@@ -17,9 +17,20 @@ import (
 )
 
 func TestRunInteractiveEnrollmentUsesExpectedInitiatePayload(t *testing.T) {
-	t.Parallel()
-
 	tmpDir := t.TempDir()
+	originalDetectCloudLocation := detectCloudLocation
+	detectCloudLocation = func(context.Context, *slog.Logger) *api.NodeLocation {
+		return &api.NodeLocation{
+			Provider: "aws",
+			Source:   "cloud_metadata",
+			Region:   "eu-central-1",
+			Zone:     "eu-central-1a",
+		}
+	}
+	t.Cleanup(func() {
+		detectCloudLocation = originalDetectCloudLocation
+	})
+
 	cfg := config.Config{
 		APIURL:            "https://api.example.com",
 		HeartbeatInterval: 30 * time.Second,
@@ -71,6 +82,12 @@ func TestRunInteractiveEnrollmentUsesExpectedInitiatePayload(t *testing.T) {
 	}
 	if client.initiateRequest.AdditionalInfo.AgentVersion != "dev" {
 		t.Fatalf("agent version mismatch: got %q want %q", client.initiateRequest.AdditionalInfo.AgentVersion, "dev")
+	}
+	if client.initiateRequest.AdditionalInfo.Location == nil {
+		t.Fatal("expected cloud metadata location to be included")
+	}
+	if client.initiateRequest.AdditionalInfo.Location.Region != "eu-central-1" {
+		t.Fatalf("location region mismatch: got %q want %q", client.initiateRequest.AdditionalInfo.Location.Region, "eu-central-1")
 	}
 }
 
