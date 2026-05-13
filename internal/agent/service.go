@@ -159,17 +159,7 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 	}
 	if realtimeService != nil {
 		realtimeService.SetRuntimeAgentVersion(version)
-		if location, locationErr := cloudmetadata.Detect(context.Background()); locationErr != nil {
-			logger.Debug("cloud metadata location detection skipped", "error", locationErr)
-		} else if location != nil {
-			realtimeService.SetRuntimeLocation(location)
-			logger.Info(
-				"cloud metadata location detected",
-				"provider", location.Provider,
-				"region", location.Region,
-				"zone", location.Zone,
-			)
-		}
+		setRealtimeCloudLocation(context.Background(), logger, realtimeService, false)
 		hostInfo, hostInfoErr := system.HostInfo(context.Background())
 		if hostInfoErr != nil {
 			logger.Warn("failed to read host metadata for realtime auth", "error", hostInfoErr)
@@ -220,6 +210,7 @@ func (s *Service) Run(ctx context.Context) error {
 		name string
 		run  func(context.Context) error
 	}{
+		{name: "cloud-metadata", run: s.runCloudMetadataSync},
 		{name: "realtime", run: s.realtime.Run},
 		{name: "metrics", run: s.metrics.Run},
 		{name: "tasks", run: s.tasks.Run},
@@ -253,6 +244,71 @@ func (s *Service) Run(ctx context.Context) error {
 		s.logger.Warn("graceful shutdown timed out", "timeout", s.cfg.ShutdownTimeout)
 		return nil
 	}
+}
+
+func (s *Service) runCloudMetadataSync(ctx context.Context) error {
+	if s.realtime == nil || s.realtime.RuntimeLocation() != nil {
+		return nil
+	}
+
+	delays := []time.Duration{
+		5 * time.Second,
+		30 * time.Second,
+		2 * time.Minute,
+		5 * time.Minute,
+		15 * time.Minute,
+	}
+	for _, delay := range delays {
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil
+		case <-timer.C:
+		}
+
+		if setRealtimeCloudLocation(ctx, s.logger, s.realtime, true) {
+			return nil
+		}
+	}
+
+	return nil
+}
+
+func setRealtimeCloudLocation(
+	ctx context.Context,
+	logger *slog.Logger,
+	realtimeService *realtime.Service,
+	refreshAuth bool,
+) bool {
+	location, err := cloudmetadata.Detect(ctx)
+	if err != nil {
+		if logger != nil {
+			logger.Debug("cloud metadata location detection skipped", "error", err)
+		}
+		return false
+	}
+	if location == nil {
+		return false
+	}
+
+	realtimeService.SetRuntimeLocation(location)
+	if logger != nil {
+		logger.Info(
+			"cloud metadata location detected",
+			"provider", location.Provider,
+			"region", location.Region,
+			"zone", location.Zone,
+		)
+	}
+	if refreshAuth {
+		refreshCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if err := realtimeService.RefreshAuth(refreshCtx); err != nil && !errors.Is(err, realtime.ErrSessionNotActive) && logger != nil {
+			logger.Debug("cloud metadata realtime auth refresh skipped", "error", err)
+		}
+	}
+	return true
 }
 
 func (s *Service) bootstrapIdentity(ctx context.Context) error {

@@ -14,7 +14,7 @@ import (
 
 const (
 	sourceCloudMetadata = "cloud_metadata"
-	defaultTimeout      = 250 * time.Millisecond
+	defaultTimeout      = 2 * time.Second
 )
 
 type Detector struct {
@@ -27,7 +27,7 @@ type Detector struct {
 
 func DefaultDetector() Detector {
 	return Detector{
-		Client:        &http.Client{Timeout: defaultTimeout},
+		Client:        defaultHTTPClient(defaultTimeout),
 		Timeout:       defaultTimeout,
 		AWSEndpoint:   "http://169.254.169.254",
 		GCPEndpoint:   "http://metadata.google.internal",
@@ -41,7 +41,7 @@ func Detect(ctx context.Context) (*api.NodeLocation, error) {
 
 func (d Detector) Detect(ctx context.Context) (*api.NodeLocation, error) {
 	if d.Client == nil {
-		d.Client = &http.Client{Timeout: d.timeout()}
+		d.Client = defaultHTTPClient(d.timeout())
 	}
 
 	providers := []func(context.Context) (*api.NodeLocation, error){
@@ -80,10 +80,14 @@ func (d Detector) detectAWS(ctx context.Context) (*api.NodeLocation, error) {
 
 	tokenResp, err := d.Client.Do(tokenReq)
 	if err != nil {
-		return nil, err
+		return d.detectAWSIdentityDocument(ctx, base, "")
 	}
 	defer tokenResp.Body.Close()
 	if tokenResp.StatusCode < 200 || tokenResp.StatusCode >= 300 {
+		location, docErr := d.detectAWSIdentityDocument(ctx, base, "")
+		if docErr == nil && location != nil {
+			return location, nil
+		}
 		return nil, fmt.Errorf("aws metadata token status %d", tokenResp.StatusCode)
 	}
 	tokenBytes, err := io.ReadAll(io.LimitReader(tokenResp.Body, 4096))
@@ -95,13 +99,19 @@ func (d Detector) detectAWS(ctx context.Context) (*api.NodeLocation, error) {
 		return nil, fmt.Errorf("aws metadata token was empty")
 	}
 
+	return d.detectAWSIdentityDocument(ctx, base, token)
+}
+
+func (d Detector) detectAWSIdentityDocument(ctx context.Context, base, token string) (*api.NodeLocation, error) {
 	docCtx, cancel := context.WithTimeout(ctx, d.timeout())
 	defer cancel()
 	docReq, err := http.NewRequestWithContext(docCtx, http.MethodGet, base+"/latest/dynamic/instance-identity/document", nil)
 	if err != nil {
 		return nil, err
 	}
-	docReq.Header.Set("X-aws-ec2-metadata-token", token)
+	if token != "" {
+		docReq.Header.Set("X-aws-ec2-metadata-token", token)
+	}
 
 	var doc struct {
 		Region           string `json:"region"`
@@ -190,6 +200,12 @@ func (d Detector) timeout() time.Duration {
 		return d.Timeout
 	}
 	return defaultTimeout
+}
+
+func defaultHTTPClient(timeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	return &http.Client{Timeout: timeout, Transport: transport}
 }
 
 func buildLocation(provider, region, zone string) *api.NodeLocation {

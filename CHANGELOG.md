@@ -15,6 +15,13 @@ Formatting rules:
 
 ## [Unreleased]
 
+## [2026.5.2] - 2026-05-14
+
+### Fixed
+
+- Improved cloud metadata location detection by allowing slower metadata services, bypassing HTTP proxy settings for link-local metadata calls, and falling back to AWS IMDSv1 when IMDSv2 token retrieval is unavailable.
+- Added delayed cloud metadata retries after startup and re-sent realtime authentication when location is discovered after the initial socket connection.
+
 ## [2026.5.1] - 2026-05-14
 
 ### Added

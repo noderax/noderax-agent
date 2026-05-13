@@ -52,6 +52,43 @@ func TestDetectorDetectsAWSWithIMDSv2(t *testing.T) {
 	}
 }
 
+func TestDetectorDetectsAWSWithIMDSv1Fallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/latest/api/token":
+			http.Error(w, "imds v2 unavailable", http.StatusNotFound)
+		case "/latest/dynamic/instance-identity/document":
+			if got := r.Header.Get("X-aws-ec2-metadata-token"); got != "" {
+				t.Errorf("metadata token header = %q, want empty", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"region":           "us-east-1",
+				"availabilityZone": "us-east-1a",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	location, err := Detector{
+		Client:        server.Client(),
+		Timeout:       time.Second,
+		AWSEndpoint:   server.URL,
+		GCPEndpoint:   "",
+		AzureEndpoint: "",
+	}.Detect(context.Background())
+	if err != nil {
+		t.Fatalf("Detect() error = %v", err)
+	}
+	if location == nil {
+		t.Fatal("expected location, got nil")
+	}
+	if location.Provider != "aws" || location.Region != "us-east-1" || location.Zone != "us-east-1a" {
+		t.Fatalf("unexpected location: %+v", location)
+	}
+}
+
 func TestDetectorDetectsGCPAndDerivesRegion(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Metadata-Flavor"); got != "Google" {

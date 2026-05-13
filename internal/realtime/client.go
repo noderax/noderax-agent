@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -56,6 +57,7 @@ type Service struct {
 	healthURL              string
 	namespace              string
 	path                   string
+	runtimeMu              sync.RWMutex
 	runtimeAgentVersion    string
 	runtimePlatformVersion string
 	runtimeKernelVersion   string
@@ -383,19 +385,46 @@ func (s *Service) ReportDispatchHandled() {
 }
 
 func (s *Service) SetRuntimeAgentVersion(version string) {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
 	s.runtimeAgentVersion = strings.TrimSpace(version)
 }
 
 func (s *Service) SetRuntimePlatformVersion(version string) {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
 	s.runtimePlatformVersion = strings.TrimSpace(version)
 }
 
 func (s *Service) SetRuntimeKernelVersion(version string) {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
 	s.runtimeKernelVersion = strings.TrimSpace(version)
 }
 
 func (s *Service) SetRuntimeLocation(location *api.NodeLocation) {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
 	s.runtimeLocation = location
+}
+
+func (s *Service) RuntimeLocation() *api.NodeLocation {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	return s.runtimeLocation
+}
+
+func (s *Service) RefreshAuth(ctx context.Context) error {
+	if !s.sessionActive.Load() {
+		return ErrSessionNotActive
+	}
+
+	nodeID, agentToken := s.credentials()
+	if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(agentToken) == "" {
+		return fmt.Errorf("agent credentials are missing")
+	}
+
+	return s.enqueueCritical(ctx, s.authPayload(nodeID, agentToken))
 }
 
 func (s *Service) SnapshotStats() Stats {
@@ -536,17 +565,7 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 	}
 
 	socket.OnConnect(func() {
-		authPayload := authEvent{
-			Type:            EventAgentAuth,
-			NodeID:          nodeID,
-			AgentToken:      agentToken,
-			AgentVersion:    s.runtimeAgentVersion,
-			PlatformVersion: s.runtimePlatformVersion,
-			KernelVersion:   s.runtimeKernelVersion,
-			RootAccess:      s.rootAccessReport(),
-			Location:        s.runtimeLocation,
-		}
-		socket.Emit(EventAgentAuth, authPayload)
+		socket.Emit(EventAgentAuth, s.authPayload(nodeID, agentToken))
 	})
 
 	socket.OnEvent(EventAgentAuthAck, func(payload map[string]any) {
@@ -589,16 +608,7 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 			NodeID:        nodeID,
 			RootAccess:    event.RootAccess,
 		})
-		socket.Emit(EventAgentAuth, authEvent{
-			Type:            EventAgentAuth,
-			NodeID:          nodeID,
-			AgentToken:      agentToken,
-			AgentVersion:    s.runtimeAgentVersion,
-			PlatformVersion: s.runtimePlatformVersion,
-			KernelVersion:   s.runtimeKernelVersion,
-			RootAccess:      s.rootAccessReport(),
-			Location:        s.runtimeLocation,
-		})
+		socket.Emit(EventAgentAuth, s.authPayload(nodeID, agentToken))
 	})
 
 	socket.OnEvent(EventAgentAuthErr, func(payload map[string]any) {
@@ -719,6 +729,22 @@ func (s *Service) rootAccessReport() *api.RootAccessAgentReport {
 	}
 
 	return s.rootAccessReporter()
+}
+
+func (s *Service) authPayload(nodeID, agentToken string) authEvent {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+
+	return authEvent{
+		Type:            EventAgentAuth,
+		NodeID:          nodeID,
+		AgentToken:      agentToken,
+		AgentVersion:    s.runtimeAgentVersion,
+		PlatformVersion: s.runtimePlatformVersion,
+		KernelVersion:   s.runtimeKernelVersion,
+		RootAccess:      s.rootAccessReport(),
+		Location:        s.runtimeLocation,
+	}
 }
 
 func (s *Service) runConnection(ctx context.Context, conn *socketIOConn) error {
