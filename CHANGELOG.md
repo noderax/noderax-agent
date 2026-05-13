@@ -15,6 +15,13 @@ Formatting rules:
 
 ## [Unreleased]
 
+## [2026.5.1] - 2026-05-14
+
+### Added
+
+- Added cloud metadata location detection for AWS, GCP, and Azure so agents can report provider, region, and zone when the host metadata service is available.
+- Added node location reporting to interactive enrollment, bootstrap enrollment, and realtime authentication payloads so the control plane can keep node location metadata current.
+
 ## [1.0.7] - 2026-04-08
 
 ### Added
