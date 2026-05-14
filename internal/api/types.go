@@ -56,10 +56,12 @@ type EnrollmentAdditionalInfo struct {
 }
 
 type NodeLocation struct {
-	Provider string `json:"provider"`
-	Source   string `json:"source"`
-	Region   string `json:"region"`
-	Zone     string `json:"zone,omitempty"`
+	Provider  string   `json:"provider"`
+	Source    string   `json:"source"`
+	Region    string   `json:"region"`
+	Zone      string   `json:"zone,omitempty"`
+	Latitude  *float64 `json:"latitude,omitempty"`
+	Longitude *float64 `json:"longitude,omitempty"`
 }
 
 type InitiateEnrollmentRequest struct {

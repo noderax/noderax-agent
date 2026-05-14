@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -28,48 +29,60 @@ const (
 )
 
 type Config struct {
-	APIURL                string
-	APITLSCAFile          string
-	EnrollmentToken       string
-	NodeID                string
-	AgentToken            string
-	HeartbeatInterval     time.Duration
-	MetricsInterval       time.Duration
-	TaskPollInterval      time.Duration
-	RequestTimeout        time.Duration
-	TaskTimeout           time.Duration
-	ShutdownTimeout       time.Duration
-	RealtimeEnabled       bool
-	RealtimePingInterval  time.Duration
-	RealtimeQueueSize     int
-	RealtimeBackoffJitter float64
-	RealtimeNamespace     string
-	RealtimePath          string
-	StateFile             string
-	ConfigFile            string
-	LogLevel              string
+	APIURL                  string
+	APITLSCAFile            string
+	EnrollmentToken         string
+	NodeID                  string
+	AgentToken              string
+	HeartbeatInterval       time.Duration
+	MetricsInterval         time.Duration
+	TaskPollInterval        time.Duration
+	RequestTimeout          time.Duration
+	TaskTimeout             time.Duration
+	ShutdownTimeout         time.Duration
+	RealtimeEnabled         bool
+	RealtimePingInterval    time.Duration
+	RealtimeQueueSize       int
+	RealtimeBackoffJitter   float64
+	RealtimeNamespace       string
+	RealtimePath            string
+	LocationManualRegion    string
+	LocationManualZone      string
+	LocationManualLatitude  *float64
+	LocationManualLongitude *float64
+	LocationPublicIPEnabled bool
+	IPInfoToken             string
+	StateFile               string
+	ConfigFile              string
+	LogLevel                string
 }
 
 type fileConfig struct {
-	APIURL                string   `json:"api_url"`
-	APITLSCAFile          string   `json:"api_tls_ca_file,omitempty"`
-	EnrollmentToken       string   `json:"enrollment_token"`
-	NodeID                string   `json:"node_id"`
-	AgentToken            string   `json:"agent_token"`
-	HeartbeatInterval     string   `json:"heartbeat_interval"`
-	MetricsInterval       string   `json:"metrics_interval"`
-	TaskPollInterval      string   `json:"task_poll_interval"`
-	RequestTimeout        string   `json:"request_timeout"`
-	TaskTimeout           string   `json:"task_timeout"`
-	ShutdownTimeout       string   `json:"shutdown_timeout"`
-	RealtimeEnabled       *bool    `json:"realtime_enabled,omitempty"`
-	RealtimePingInterval  string   `json:"realtime_ping_interval,omitempty"`
-	RealtimeQueueSize     *int     `json:"realtime_queue_size,omitempty"`
-	RealtimeBackoffJitter *float64 `json:"realtime_backoff_jitter,omitempty"`
-	RealtimeNamespace     string   `json:"realtime_namespace,omitempty"`
-	RealtimePath          string   `json:"realtime_path,omitempty"`
-	StateFile             string   `json:"state_file"`
-	LogLevel              string   `json:"log_level"`
+	APIURL                  string   `json:"api_url"`
+	APITLSCAFile            string   `json:"api_tls_ca_file,omitempty"`
+	EnrollmentToken         string   `json:"enrollment_token"`
+	NodeID                  string   `json:"node_id"`
+	AgentToken              string   `json:"agent_token"`
+	HeartbeatInterval       string   `json:"heartbeat_interval"`
+	MetricsInterval         string   `json:"metrics_interval"`
+	TaskPollInterval        string   `json:"task_poll_interval"`
+	RequestTimeout          string   `json:"request_timeout"`
+	TaskTimeout             string   `json:"task_timeout"`
+	ShutdownTimeout         string   `json:"shutdown_timeout"`
+	RealtimeEnabled         *bool    `json:"realtime_enabled,omitempty"`
+	RealtimePingInterval    string   `json:"realtime_ping_interval,omitempty"`
+	RealtimeQueueSize       *int     `json:"realtime_queue_size,omitempty"`
+	RealtimeBackoffJitter   *float64 `json:"realtime_backoff_jitter,omitempty"`
+	RealtimeNamespace       string   `json:"realtime_namespace,omitempty"`
+	RealtimePath            string   `json:"realtime_path,omitempty"`
+	LocationManualRegion    string   `json:"location_manual_region,omitempty"`
+	LocationManualZone      string   `json:"location_manual_zone,omitempty"`
+	LocationManualLatitude  *float64 `json:"location_manual_latitude,omitempty"`
+	LocationManualLongitude *float64 `json:"location_manual_longitude,omitempty"`
+	LocationPublicIPEnabled *bool    `json:"location_public_ip_enabled,omitempty"`
+	IPInfoToken             string   `json:"ipinfo_token,omitempty"`
+	StateFile               string   `json:"state_file"`
+	LogLevel                string   `json:"log_level"`
 }
 
 func Default() Config {
@@ -138,26 +151,36 @@ func SaveFile(path string, cfg Config) error {
 	realtimeEnabled := cfg.RealtimeEnabled
 	realtimeQueueSize := cfg.RealtimeQueueSize
 	realtimeBackoffJitter := cfg.RealtimeBackoffJitter
+	var locationPublicIPEnabled *bool
+	if cfg.LocationPublicIPEnabled {
+		locationPublicIPEnabled = &cfg.LocationPublicIPEnabled
+	}
 	raw := fileConfig{
-		APIURL:                cfg.APIURL,
-		APITLSCAFile:          cfg.APITLSCAFile,
-		EnrollmentToken:       cfg.EnrollmentToken,
-		NodeID:                cfg.NodeID,
-		AgentToken:            cfg.AgentToken,
-		HeartbeatInterval:     cfg.HeartbeatInterval.String(),
-		MetricsInterval:       cfg.MetricsInterval.String(),
-		TaskPollInterval:      cfg.TaskPollInterval.String(),
-		RequestTimeout:        cfg.RequestTimeout.String(),
-		TaskTimeout:           cfg.TaskTimeout.String(),
-		ShutdownTimeout:       cfg.ShutdownTimeout.String(),
-		RealtimeEnabled:       &realtimeEnabled,
-		RealtimePingInterval:  cfg.RealtimePingInterval.String(),
-		RealtimeQueueSize:     &realtimeQueueSize,
-		RealtimeBackoffJitter: &realtimeBackoffJitter,
-		RealtimeNamespace:     cfg.RealtimeNamespace,
-		RealtimePath:          cfg.RealtimePath,
-		StateFile:             cfg.StateFile,
-		LogLevel:              cfg.LogLevel,
+		APIURL:                  cfg.APIURL,
+		APITLSCAFile:            cfg.APITLSCAFile,
+		EnrollmentToken:         cfg.EnrollmentToken,
+		NodeID:                  cfg.NodeID,
+		AgentToken:              cfg.AgentToken,
+		HeartbeatInterval:       cfg.HeartbeatInterval.String(),
+		MetricsInterval:         cfg.MetricsInterval.String(),
+		TaskPollInterval:        cfg.TaskPollInterval.String(),
+		RequestTimeout:          cfg.RequestTimeout.String(),
+		TaskTimeout:             cfg.TaskTimeout.String(),
+		ShutdownTimeout:         cfg.ShutdownTimeout.String(),
+		RealtimeEnabled:         &realtimeEnabled,
+		RealtimePingInterval:    cfg.RealtimePingInterval.String(),
+		RealtimeQueueSize:       &realtimeQueueSize,
+		RealtimeBackoffJitter:   &realtimeBackoffJitter,
+		RealtimeNamespace:       cfg.RealtimeNamespace,
+		RealtimePath:            cfg.RealtimePath,
+		LocationManualRegion:    cfg.LocationManualRegion,
+		LocationManualZone:      cfg.LocationManualZone,
+		LocationManualLatitude:  cloneFloat64Ptr(cfg.LocationManualLatitude),
+		LocationManualLongitude: cloneFloat64Ptr(cfg.LocationManualLongitude),
+		LocationPublicIPEnabled: locationPublicIPEnabled,
+		IPInfoToken:             cfg.IPInfoToken,
+		StateFile:               cfg.StateFile,
+		LogLevel:                cfg.LogLevel,
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -246,11 +269,17 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.StateFile) == "" {
 		return fmt.Errorf("STATE_FILE must not be empty")
 	}
+	if err := validateManualLocation(c); err != nil {
+		return err
+	}
 	return nil
 }
 
 func (c *Config) normalize() {
 	c.APIURL = normalizeAPIURL(c.APIURL)
+	c.LocationManualRegion = strings.TrimSpace(c.LocationManualRegion)
+	c.LocationManualZone = strings.TrimSpace(c.LocationManualZone)
+	c.IPInfoToken = strings.TrimSpace(c.IPInfoToken)
 }
 
 func detectConfigFile() string {
@@ -322,6 +351,24 @@ func mergeConfigFile(cfg *Config, path string) error {
 	if raw.RealtimePath != "" {
 		cfg.RealtimePath = raw.RealtimePath
 	}
+	if raw.LocationManualRegion != "" {
+		cfg.LocationManualRegion = raw.LocationManualRegion
+	}
+	if raw.LocationManualZone != "" {
+		cfg.LocationManualZone = raw.LocationManualZone
+	}
+	if raw.LocationManualLatitude != nil {
+		cfg.LocationManualLatitude = cloneFloat64Ptr(raw.LocationManualLatitude)
+	}
+	if raw.LocationManualLongitude != nil {
+		cfg.LocationManualLongitude = cloneFloat64Ptr(raw.LocationManualLongitude)
+	}
+	if raw.LocationPublicIPEnabled != nil {
+		cfg.LocationPublicIPEnabled = *raw.LocationPublicIPEnabled
+	}
+	if raw.IPInfoToken != "" {
+		cfg.IPInfoToken = strings.TrimSpace(raw.IPInfoToken)
+	}
 
 	if err := applyDuration(&cfg.HeartbeatInterval, "heartbeat_interval", raw.HeartbeatInterval); err != nil {
 		return err
@@ -358,7 +405,19 @@ func mergeEnv(cfg *Config) error {
 	overrideString(&cfg.LogLevel, "LOG_LEVEL")
 	overrideStringAny(&cfg.RealtimeNamespace, "NODERAX_REALTIME_NAMESPACE", "REALTIME_NAMESPACE")
 	overrideStringAny(&cfg.RealtimePath, "NODERAX_REALTIME_PATH", "REALTIME_PATH")
+	overrideStringAny(&cfg.LocationManualRegion, "NODERAX_LOCATION_MANUAL_REGION", "LOCATION_MANUAL_REGION")
+	overrideStringAny(&cfg.LocationManualZone, "NODERAX_LOCATION_MANUAL_ZONE", "LOCATION_MANUAL_ZONE")
+	overrideStringAny(&cfg.IPInfoToken, "NODERAX_IPINFO_TOKEN", "IPINFO_TOKEN")
 	if err := overrideBool(&cfg.RealtimeEnabled, "REALTIME_ENABLED"); err != nil {
+		return err
+	}
+	if err := overrideBoolAny(&cfg.LocationPublicIPEnabled, "NODERAX_LOCATION_PUBLIC_IP_ENABLED", "LOCATION_PUBLIC_IP_ENABLED"); err != nil {
+		return err
+	}
+	if err := overrideFloatPtrAny(&cfg.LocationManualLatitude, "NODERAX_LOCATION_MANUAL_LATITUDE", "LOCATION_MANUAL_LATITUDE"); err != nil {
+		return err
+	}
+	if err := overrideFloatPtrAny(&cfg.LocationManualLongitude, "NODERAX_LOCATION_MANUAL_LONGITUDE", "LOCATION_MANUAL_LONGITUDE"); err != nil {
 		return err
 	}
 
@@ -472,6 +531,22 @@ func overrideBool(target *bool, key string) error {
 	return nil
 }
 
+func overrideBoolAny(target *bool, keys ...string) error {
+	for _, key := range keys {
+		value := strings.TrimSpace(os.Getenv(key))
+		if value == "" {
+			continue
+		}
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", key, err)
+		}
+		*target = parsed
+		return nil
+	}
+	return nil
+}
+
 func overrideInt(target *int, key string) error {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
@@ -502,6 +577,22 @@ func overrideFloat(target *float64, key string) error {
 	return nil
 }
 
+func overrideFloatPtrAny(target **float64, keys ...string) error {
+	for _, key := range keys {
+		value := strings.TrimSpace(os.Getenv(key))
+		if value == "" {
+			continue
+		}
+		parsed, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", key, err)
+		}
+		*target = &parsed
+		return nil
+	}
+	return nil
+}
+
 func applyDuration(target *time.Duration, name, value string) error {
 	if strings.TrimSpace(value) == "" {
 		return nil
@@ -527,4 +618,44 @@ func normalizeAPIURL(raw string) string {
 	}
 
 	return strings.TrimRight("https://"+value, "/")
+}
+
+func validateManualLocation(c Config) error {
+	manualConfigured := strings.TrimSpace(c.LocationManualRegion) != "" ||
+		strings.TrimSpace(c.LocationManualZone) != "" ||
+		c.LocationManualLatitude != nil ||
+		c.LocationManualLongitude != nil
+	if !manualConfigured {
+		return nil
+	}
+
+	if strings.TrimSpace(c.LocationManualRegion) == "" {
+		return fmt.Errorf("LOCATION_MANUAL_REGION is required when manual location is configured")
+	}
+	if c.LocationManualLatitude == nil || c.LocationManualLongitude == nil {
+		return fmt.Errorf("LOCATION_MANUAL_LATITUDE and LOCATION_MANUAL_LONGITUDE are required when manual location is configured")
+	}
+	if !validLatitude(*c.LocationManualLatitude) {
+		return fmt.Errorf("LOCATION_MANUAL_LATITUDE must be between -90 and 90")
+	}
+	if !validLongitude(*c.LocationManualLongitude) {
+		return fmt.Errorf("LOCATION_MANUAL_LONGITUDE must be between -180 and 180")
+	}
+	return nil
+}
+
+func validLatitude(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= -90 && value <= 90
+}
+
+func validLongitude(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= -180 && value <= 180
+}
+
+func cloneFloat64Ptr(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }

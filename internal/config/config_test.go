@@ -91,6 +91,52 @@ func TestValidateRealtimeKnobs(t *testing.T) {
 	}
 }
 
+func TestLoadLocationConfigFromEnv(t *testing.T) {
+	t.Setenv("NODERAX_API_URL", "https://api.example.com")
+	t.Setenv("NODERAX_LOCATION_MANUAL_REGION", "Istanbul Home Lab")
+	t.Setenv("NODERAX_LOCATION_MANUAL_ZONE", "Rack 1")
+	t.Setenv("NODERAX_LOCATION_MANUAL_LATITUDE", "41.0082")
+	t.Setenv("NODERAX_LOCATION_MANUAL_LONGITUDE", "28.9784")
+	t.Setenv("NODERAX_LOCATION_PUBLIC_IP_ENABLED", "true")
+	t.Setenv("NODERAX_IPINFO_TOKEN", "token-123")
+
+	cfg := Default()
+	if err := mergeEnv(&cfg); err != nil {
+		t.Fatalf("mergeEnv() error = %v", err)
+	}
+	cfg.normalize()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if cfg.LocationManualRegion != "Istanbul Home Lab" {
+		t.Fatalf("manual region = %q, want Istanbul Home Lab", cfg.LocationManualRegion)
+	}
+	if cfg.LocationManualLatitude == nil || *cfg.LocationManualLatitude != 41.0082 {
+		t.Fatalf("manual latitude = %v, want 41.0082", cfg.LocationManualLatitude)
+	}
+	if cfg.LocationManualLongitude == nil || *cfg.LocationManualLongitude != 28.9784 {
+		t.Fatalf("manual longitude = %v, want 28.9784", cfg.LocationManualLongitude)
+	}
+	if !cfg.LocationPublicIPEnabled {
+		t.Fatal("expected public IP location fallback to be enabled")
+	}
+	if cfg.IPInfoToken != "token-123" {
+		t.Fatalf("ipinfo token = %q, want token-123", cfg.IPInfoToken)
+	}
+}
+
+func TestValidateManualLocationRequiresCoordinates(t *testing.T) {
+	t.Parallel()
+
+	cfg := Default()
+	cfg.APIURL = "https://api.example.com"
+	cfg.LocationManualRegion = "Istanbul"
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error for incomplete manual location")
+	}
+}
+
 func TestNormalizeAPIURLDefaultsToHTTPS(t *testing.T) {
 	t.Parallel()
 

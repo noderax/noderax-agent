@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/noderax/noderax-agent/internal/api"
-	"github.com/noderax/noderax-agent/internal/cloudmetadata"
 	"github.com/noderax/noderax-agent/internal/config"
 	"github.com/noderax/noderax-agent/internal/metrics"
+	"github.com/noderax/noderax-agent/internal/nodelocation"
 	"github.com/noderax/noderax-agent/internal/realtime"
 	"github.com/noderax/noderax-agent/internal/rootaccess"
 	"github.com/noderax/noderax-agent/internal/system"
@@ -159,7 +159,7 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 	}
 	if realtimeService != nil {
 		realtimeService.SetRuntimeAgentVersion(version)
-		setRealtimeCloudLocation(context.Background(), logger, realtimeService, false)
+		setRealtimeNodeLocation(context.Background(), cfg, logger, realtimeService, false)
 		hostInfo, hostInfoErr := system.HostInfo(context.Background())
 		if hostInfoErr != nil {
 			logger.Warn("failed to read host metadata for realtime auth", "error", hostInfoErr)
@@ -210,7 +210,7 @@ func (s *Service) Run(ctx context.Context) error {
 		name string
 		run  func(context.Context) error
 	}{
-		{name: "cloud-metadata", run: s.runCloudMetadataSync},
+		{name: "node-location", run: s.runNodeLocationSync},
 		{name: "realtime", run: s.realtime.Run},
 		{name: "metrics", run: s.metrics.Run},
 		{name: "tasks", run: s.tasks.Run},
@@ -246,7 +246,7 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 }
 
-func (s *Service) runCloudMetadataSync(ctx context.Context) error {
+func (s *Service) runNodeLocationSync(ctx context.Context) error {
 	if s.realtime == nil || s.realtime.RuntimeLocation() != nil {
 		return nil
 	}
@@ -267,7 +267,7 @@ func (s *Service) runCloudMetadataSync(ctx context.Context) error {
 		case <-timer.C:
 		}
 
-		if setRealtimeCloudLocation(ctx, s.logger, s.realtime, true) {
+		if setRealtimeNodeLocation(ctx, s.cfg, s.logger, s.realtime, true) {
 			return nil
 		}
 	}
@@ -275,16 +275,17 @@ func (s *Service) runCloudMetadataSync(ctx context.Context) error {
 	return nil
 }
 
-func setRealtimeCloudLocation(
+func setRealtimeNodeLocation(
 	ctx context.Context,
+	cfg config.Config,
 	logger *slog.Logger,
 	realtimeService *realtime.Service,
 	refreshAuth bool,
 ) bool {
-	location, err := cloudmetadata.Detect(ctx)
+	location, err := nodelocation.Detect(ctx, cfg)
 	if err != nil {
 		if logger != nil {
-			logger.Debug("cloud metadata location detection skipped", "error", err)
+			logger.Debug("node location detection skipped", "error", err)
 		}
 		return false
 	}
@@ -295,8 +296,9 @@ func setRealtimeCloudLocation(
 	realtimeService.SetRuntimeLocation(location)
 	if logger != nil {
 		logger.Info(
-			"cloud metadata location detected",
+			"node location detected",
 			"provider", location.Provider,
+			"source", location.Source,
 			"region", location.Region,
 			"zone", location.Zone,
 		)
@@ -305,7 +307,7 @@ func setRealtimeCloudLocation(
 		refreshCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		if err := realtimeService.RefreshAuth(refreshCtx); err != nil && !errors.Is(err, realtime.ErrSessionNotActive) && logger != nil {
-			logger.Debug("cloud metadata realtime auth refresh skipped", "error", err)
+			logger.Debug("node location realtime auth refresh skipped", "error", err)
 		}
 	}
 	return true

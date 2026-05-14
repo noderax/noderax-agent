@@ -27,6 +27,21 @@ func TestApplyConfigValue(t *testing.T) {
 	if err := applyConfigValue(&cfg, "log_level", "debug"); err != nil {
 		t.Fatalf("applyConfigValue log_level returned error: %v", err)
 	}
+	if err := applyConfigValue(&cfg, "location_manual_region", "Istanbul Home Lab"); err != nil {
+		t.Fatalf("applyConfigValue location_manual_region returned error: %v", err)
+	}
+	if err := applyConfigValue(&cfg, "location_manual_latitude", "41.0082"); err != nil {
+		t.Fatalf("applyConfigValue location_manual_latitude returned error: %v", err)
+	}
+	if err := applyConfigValue(&cfg, "location_manual_longitude", "28.9784"); err != nil {
+		t.Fatalf("applyConfigValue location_manual_longitude returned error: %v", err)
+	}
+	if err := applyConfigValue(&cfg, "location_public_ip_enabled", "true"); err != nil {
+		t.Fatalf("applyConfigValue location_public_ip_enabled returned error: %v", err)
+	}
+	if err := applyConfigValue(&cfg, "ipinfo_token", "token-123"); err != nil {
+		t.Fatalf("applyConfigValue ipinfo_token returned error: %v", err)
+	}
 
 	if cfg.APIURL != "https://api.example.com" {
 		t.Fatalf("api url mismatch: got %q want %q", cfg.APIURL, "https://api.example.com")
@@ -36,6 +51,21 @@ func TestApplyConfigValue(t *testing.T) {
 	}
 	if cfg.LogLevel != "debug" {
 		t.Fatalf("log level mismatch: got %q want %q", cfg.LogLevel, "debug")
+	}
+	if cfg.LocationManualRegion != "Istanbul Home Lab" {
+		t.Fatalf("manual region mismatch: got %q want Istanbul Home Lab", cfg.LocationManualRegion)
+	}
+	if cfg.LocationManualLatitude == nil || *cfg.LocationManualLatitude != 41.0082 {
+		t.Fatalf("manual latitude mismatch: got %v want 41.0082", cfg.LocationManualLatitude)
+	}
+	if cfg.LocationManualLongitude == nil || *cfg.LocationManualLongitude != 28.9784 {
+		t.Fatalf("manual longitude mismatch: got %v want 28.9784", cfg.LocationManualLongitude)
+	}
+	if !cfg.LocationPublicIPEnabled {
+		t.Fatal("expected public IP location fallback to be enabled")
+	}
+	if cfg.IPInfoToken != "token-123" {
+		t.Fatalf("ipinfo token mismatch: got %q want token-123", cfg.IPInfoToken)
 	}
 }
 
@@ -130,13 +160,13 @@ func TestRenderRootProfileHelperSupportsCombinedProfiles(t *testing.T) {
 	t.Parallel()
 
 	spec := platformSpec{
-		RootProfileHelperPath:     "/usr/local/libexec/noderax-agent-root-profile",
-		ServiceUser:               "noderax",
-		ServiceName:               "noderax-agent.service",
-		RootAccessSudoersPath:     "/etc/sudoers.d/noderax-agent-root-access",
-		PackageMutationHelperPath: "/usr/local/libexec/noderax-agent-package-mutation",
+		RootProfileHelperPath:        "/usr/local/libexec/noderax-agent-root-profile",
+		ServiceUser:                  "noderax",
+		ServiceName:                  "noderax-agent.service",
+		RootAccessSudoersPath:        "/etc/sudoers.d/noderax-agent-root-access",
+		PackageMutationHelperPath:    "/usr/local/libexec/noderax-agent-package-mutation",
 		OperationalLogScanHelperPath: "/usr/local/libexec/noderax-agent-operational-log-scan",
-		TaskRootHelperPath:        "/usr/local/libexec/noderax-agent-task-root",
+		TaskRootHelperPath:           "/usr/local/libexec/noderax-agent-task-root",
 	}
 
 	helper := renderRootProfileHelper(spec)

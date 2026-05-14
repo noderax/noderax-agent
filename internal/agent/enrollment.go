@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/noderax/noderax-agent/internal/api"
-	"github.com/noderax/noderax-agent/internal/cloudmetadata"
 	"github.com/noderax/noderax-agent/internal/config"
+	"github.com/noderax/noderax-agent/internal/nodelocation"
 	"github.com/noderax/noderax-agent/internal/system"
 )
 
@@ -74,7 +74,7 @@ func RunInteractiveEnrollment(
 	if strings.TrimSpace(operatingSystem) == "" {
 		operatingSystem = hostInfo.OS
 	}
-	location := detectCloudLocation(ctx, logger)
+	location := detectNodeLocation(ctx, cfg, logger)
 
 	requestCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
@@ -153,7 +153,7 @@ func RunBootstrapEnrollment(
 	if strings.TrimSpace(operatingSystem) == "" {
 		operatingSystem = hostInfo.OS
 	}
-	location := detectCloudLocation(ctx, logger)
+	location := detectNodeLocation(ctx, cfg, logger)
 
 	requestCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
@@ -330,18 +330,19 @@ func persistIdentity(
 	return nil
 }
 
-var detectCloudLocation = func(ctx context.Context, logger *slog.Logger) *api.NodeLocation {
-	location, err := cloudmetadata.Detect(ctx)
+var detectNodeLocation = func(ctx context.Context, cfg config.Config, logger *slog.Logger) *api.NodeLocation {
+	location, err := nodelocation.Detect(ctx, cfg)
 	if err != nil {
 		if logger != nil {
-			logger.Debug("cloud metadata location detection skipped", "error", err)
+			logger.Debug("node location detection skipped", "error", err)
 		}
 		return nil
 	}
 	if location != nil && logger != nil {
 		logger.Info(
-			"cloud metadata location detected",
+			"node location detected",
 			"provider", location.Provider,
+			"source", location.Source,
 			"region", location.Region,
 			"zone", location.Zone,
 		)

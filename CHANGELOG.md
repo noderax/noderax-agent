@@ -15,6 +15,12 @@ Formatting rules:
 
 ## [Unreleased]
 
+## [2026.5.3] - 2026-05-14
+
+### Added
+
+- Added manual node location overrides and optional IPinfo public-IP geolocation fallback for non-cloud hosts, with public-IP lookup disabled unless explicitly configured.
+
 ## [2026.5.2] - 2026-05-14
 
 ### Fixed

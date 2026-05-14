@@ -27,26 +27,26 @@ const (
 	serviceManagerSystemd = "systemd"
 	serviceManagerLaunchd = "launchd"
 
-	linuxInstallDir                  = "/opt/noderax-agent"
-	linuxBinaryPath                  = linuxInstallDir + "/noderax-agent"
-	linuxSymlinkPath                 = "/usr/local/bin/noderax-agent"
-	linuxPrivilegedUpdateHelperPath  = "/usr/local/libexec/noderax-agent-self-update"
-	linuxRootProfileHelperPath       = "/usr/local/libexec/noderax-agent-root-profile"
-	linuxPackageMutationHelperPath   = "/usr/local/libexec/noderax-agent-package-mutation"
-	linuxOperationalLogScanHelperPath = "/usr/local/libexec/noderax-agent-operational-log-scan"
-	linuxTaskRootHelperPath          = "/usr/local/libexec/noderax-agent-task-root"
-	linuxPrivilegedUpdateRequestPath = linuxServiceHome + "/update-request.json"
-	linuxPackageMutationRequestPath  = linuxServiceHome + "/package-mutation-request.txt"
+	linuxInstallDir                    = "/opt/noderax-agent"
+	linuxBinaryPath                    = linuxInstallDir + "/noderax-agent"
+	linuxSymlinkPath                   = "/usr/local/bin/noderax-agent"
+	linuxPrivilegedUpdateHelperPath    = "/usr/local/libexec/noderax-agent-self-update"
+	linuxRootProfileHelperPath         = "/usr/local/libexec/noderax-agent-root-profile"
+	linuxPackageMutationHelperPath     = "/usr/local/libexec/noderax-agent-package-mutation"
+	linuxOperationalLogScanHelperPath  = "/usr/local/libexec/noderax-agent-operational-log-scan"
+	linuxTaskRootHelperPath            = "/usr/local/libexec/noderax-agent-task-root"
+	linuxPrivilegedUpdateRequestPath   = linuxServiceHome + "/update-request.json"
+	linuxPackageMutationRequestPath    = linuxServiceHome + "/package-mutation-request.txt"
 	linuxOperationalLogScanRequestPath = linuxServiceHome + "/operational-log-scan-request.json"
-	linuxTaskRootRequestPath         = linuxServiceHome + "/task-root-request.txt"
-	linuxConfigPath                  = "/etc/noderax-agent/config.json"
-	linuxStatePath                   = "/var/lib/noderax-agent/agent_identity.json"
-	linuxServiceUnit                 = "/etc/systemd/system/noderax-agent.service"
-	linuxServiceName                 = "noderax-agent.service"
-	linuxServiceUser                 = "noderax"
-	linuxServiceHome                 = "/var/lib/noderax-agent"
-	linuxBaseSudoersPath             = "/etc/sudoers.d/noderax-agent"
-	linuxRootAccessSudoersPath       = "/etc/sudoers.d/noderax-agent-root-access"
+	linuxTaskRootRequestPath           = linuxServiceHome + "/task-root-request.txt"
+	linuxConfigPath                    = "/etc/noderax-agent/config.json"
+	linuxStatePath                     = "/var/lib/noderax-agent/agent_identity.json"
+	linuxServiceUnit                   = "/etc/systemd/system/noderax-agent.service"
+	linuxServiceName                   = "noderax-agent.service"
+	linuxServiceUser                   = "noderax"
+	linuxServiceHome                   = "/var/lib/noderax-agent"
+	linuxBaseSudoersPath               = "/etc/sudoers.d/noderax-agent"
+	linuxRootAccessSudoersPath         = "/etc/sudoers.d/noderax-agent-root-access"
 
 	macOSInstallDir  = "/usr/local/lib/noderax-agent"
 	macOSBinaryPath  = macOSInstallDir + "/noderax-agent"
@@ -58,29 +58,29 @@ const (
 )
 
 type platformSpec struct {
-	Manager                    string
-	InstallDir                 string
-	BinaryPath                 string
-	SymlinkPath                string
-	PrivilegedUpdateHelperPath string
-	RootProfileHelperPath      string
-	PackageMutationHelperPath  string
+	Manager                      string
+	InstallDir                   string
+	BinaryPath                   string
+	SymlinkPath                  string
+	PrivilegedUpdateHelperPath   string
+	RootProfileHelperPath        string
+	PackageMutationHelperPath    string
 	OperationalLogScanHelperPath string
-	TaskRootHelperPath         string
-	BaseSudoersPath            string
-	RootAccessSudoersPath      string
-	ConfigPath                 string
-	StatePath                  string
-	ServiceUnit                string
-	ServiceName                string
-	WorkingDir                 string
-	RequiresRoot               bool
-	ServiceDomain              string
-	LogStdoutPath              string
-	LogStderrPath              string
-	ServiceUser                string
-	ServiceGroup               string
-	ServiceHome                string
+	TaskRootHelperPath           string
+	BaseSudoersPath              string
+	RootAccessSudoersPath        string
+	ConfigPath                   string
+	StatePath                    string
+	ServiceUnit                  string
+	ServiceName                  string
+	WorkingDir                   string
+	RequiresRoot                 bool
+	ServiceDomain                string
+	LogStdoutPath                string
+	LogStderrPath                string
+	ServiceUser                  string
+	ServiceGroup                 string
+	ServiceHome                  string
 }
 
 type installOptions struct {
@@ -632,50 +632,50 @@ func currentPlatformSpec() (platformSpec, error) {
 	switch runtime.GOOS {
 	case "linux":
 		return platformSpec{
-			Manager:                    serviceManagerSystemd,
-			InstallDir:                 linuxInstallDir,
-			BinaryPath:                 linuxBinaryPath,
-			SymlinkPath:                linuxSymlinkPath,
-			PrivilegedUpdateHelperPath: linuxPrivilegedUpdateHelperPath,
-			RootProfileHelperPath:      linuxRootProfileHelperPath,
-			PackageMutationHelperPath:  linuxPackageMutationHelperPath,
+			Manager:                      serviceManagerSystemd,
+			InstallDir:                   linuxInstallDir,
+			BinaryPath:                   linuxBinaryPath,
+			SymlinkPath:                  linuxSymlinkPath,
+			PrivilegedUpdateHelperPath:   linuxPrivilegedUpdateHelperPath,
+			RootProfileHelperPath:        linuxRootProfileHelperPath,
+			PackageMutationHelperPath:    linuxPackageMutationHelperPath,
 			OperationalLogScanHelperPath: linuxOperationalLogScanHelperPath,
-			TaskRootHelperPath:         linuxTaskRootHelperPath,
-			BaseSudoersPath:            linuxBaseSudoersPath,
-			RootAccessSudoersPath:      linuxRootAccessSudoersPath,
-			ConfigPath:                 linuxConfigPath,
-			StatePath:                  linuxStatePath,
-			ServiceUnit:                linuxServiceUnit,
-			ServiceName:                linuxServiceName,
-			WorkingDir:                 linuxInstallDir,
-			RequiresRoot:               true,
-			ServiceDomain:              "system",
-			ServiceUser:                linuxServiceUser,
-			ServiceGroup:               linuxServiceUser,
-			ServiceHome:                linuxServiceHome,
+			TaskRootHelperPath:           linuxTaskRootHelperPath,
+			BaseSudoersPath:              linuxBaseSudoersPath,
+			RootAccessSudoersPath:        linuxRootAccessSudoersPath,
+			ConfigPath:                   linuxConfigPath,
+			StatePath:                    linuxStatePath,
+			ServiceUnit:                  linuxServiceUnit,
+			ServiceName:                  linuxServiceName,
+			WorkingDir:                   linuxInstallDir,
+			RequiresRoot:                 true,
+			ServiceDomain:                "system",
+			ServiceUser:                  linuxServiceUser,
+			ServiceGroup:                 linuxServiceUser,
+			ServiceHome:                  linuxServiceHome,
 		}, nil
 	case "darwin":
 		return platformSpec{
-			Manager:                    serviceManagerLaunchd,
-			InstallDir:                 macOSInstallDir,
-			BinaryPath:                 macOSBinaryPath,
-			SymlinkPath:                macOSSymlinkPath,
-			PrivilegedUpdateHelperPath: "",
-			RootProfileHelperPath:      "",
-			PackageMutationHelperPath:  "",
+			Manager:                      serviceManagerLaunchd,
+			InstallDir:                   macOSInstallDir,
+			BinaryPath:                   macOSBinaryPath,
+			SymlinkPath:                  macOSSymlinkPath,
+			PrivilegedUpdateHelperPath:   "",
+			RootProfileHelperPath:        "",
+			PackageMutationHelperPath:    "",
 			OperationalLogScanHelperPath: "",
-			TaskRootHelperPath:         "",
-			BaseSudoersPath:            "",
-			RootAccessSudoersPath:      "",
-			ConfigPath:                 macOSConfigPath,
-			StatePath:                  macOSStatePath,
-			ServiceUnit:                macOSServiceUnit,
-			ServiceName:                macOSServiceName,
-			WorkingDir:                 macOSInstallDir,
-			RequiresRoot:               true,
-			ServiceDomain:              "system",
-			LogStdoutPath:              "/var/log/noderax-agent.log",
-			LogStderrPath:              "/var/log/noderax-agent.error.log",
+			TaskRootHelperPath:           "",
+			BaseSudoersPath:              "",
+			RootAccessSudoersPath:        "",
+			ConfigPath:                   macOSConfigPath,
+			StatePath:                    macOSStatePath,
+			ServiceUnit:                  macOSServiceUnit,
+			ServiceName:                  macOSServiceName,
+			WorkingDir:                   macOSInstallDir,
+			RequiresRoot:                 true,
+			ServiceDomain:                "system",
+			LogStdoutPath:                "/var/log/noderax-agent.log",
+			LogStderrPath:                "/var/log/noderax-agent.error.log",
 		}, nil
 	default:
 		return platformSpec{}, fmt.Errorf("unsupported platform %s", runtime.GOOS)
@@ -782,6 +782,18 @@ func applyConfigValue(cfg *config.Config, key, value string) error {
 		cfg.StateFile = value
 	case "log_level":
 		cfg.LogLevel = value
+	case "location_manual_region":
+		cfg.LocationManualRegion = value
+	case "location_manual_zone":
+		cfg.LocationManualZone = value
+	case "location_manual_latitude":
+		return setFloat64Ptr(&cfg.LocationManualLatitude, value)
+	case "location_manual_longitude":
+		return setFloat64Ptr(&cfg.LocationManualLongitude, value)
+	case "location_public_ip_enabled":
+		return setBool(&cfg.LocationPublicIPEnabled, value)
+	case "ipinfo_token":
+		cfg.IPInfoToken = value
 	default:
 		return fmt.Errorf("unsupported config key %q", key)
 	}
@@ -795,6 +807,29 @@ func setDuration(target *time.Duration, value string) error {
 		return fmt.Errorf("parse duration %q: %w", value, err)
 	}
 	*target = duration
+	return nil
+}
+
+func setFloat64Ptr(target **float64, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		*target = nil
+		return nil
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return fmt.Errorf("parse float %q: %w", value, err)
+	}
+	*target = &parsed
+	return nil
+}
+
+func setBool(target *bool, value string) error {
+	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+	if err != nil {
+		return fmt.Errorf("parse bool %q: %w", value, err)
+	}
+	*target = parsed
 	return nil
 }
 
