@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	artifactAMD64 = "noderax-agent-linux-amd64"
-	artifactARM64 = "noderax-agent-linux-arm64"
+	artifactAMD64     = "noderax-agent-linux-amd64"
+	artifactARM64     = "noderax-agent-linux-arm64"
+	artifactInstaller = "install.sh"
 )
 
 type releaseManifest struct {
@@ -23,6 +24,7 @@ type releaseManifest struct {
 	Commit      string                   `json:"commit"`
 	Channel     string                   `json:"channel"`
 	Notes       []releaseNotesSection    `json:"notes"`
+	Installer   *releaseArtifact         `json:"installer,omitempty"`
 	Artifacts   releaseManifestArtifacts `json:"artifacts"`
 }
 
@@ -140,13 +142,16 @@ func runBundle(args []string) error {
 		Commit:      commit,
 		Channel:     "tag",
 		Notes:       notes,
+		Installer:   buildReleaseArtifact(downloadBaseURL, artifactInstaller, checksums),
 		Artifacts: releaseManifestArtifacts{
 			AMD64: buildReleaseArtifact(downloadBaseURL, artifactAMD64, checksums),
 			ARM64: buildReleaseArtifact(downloadBaseURL, artifactARM64, checksums),
 		},
 	}
 
-	if manifest.Artifacts.AMD64 == nil || manifest.Artifacts.ARM64 == nil {
+	if manifest.Installer == nil ||
+		manifest.Artifacts.AMD64 == nil ||
+		manifest.Artifacts.ARM64 == nil {
 		return errors.New("release bundle is missing one or more required architecture artifacts")
 	}
 

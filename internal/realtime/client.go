@@ -2,6 +2,7 @@ package realtime
 
 import (
 	"context"
+	crand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +30,7 @@ const (
 )
 
 type AuthAckHook func(context.Context, authAckEvent)
+type TokenRotateHook func(context.Context, TokenRotateEvent) error
 
 var ErrSessionNotActive = errors.New("realtime session is not authenticated")
 
@@ -53,6 +55,7 @@ type Service struct {
 	rootAccessReporter     func() *api.RootAccessAgentReport
 	dispatcher             *dispatcher
 	onAuthAck              AuthAckHook
+	onTokenRotate          TokenRotateHook
 	dialURL                string
 	healthURL              string
 	namespace              string
@@ -68,6 +71,7 @@ type Service struct {
 	pingsSent       atomic.Int64
 	metricsSent     atomic.Int64
 	lifecycleSent   atomic.Int64
+	lifecycleSeq    atomic.Int64
 	queueDrops      atomic.Int64
 	logDrops        atomic.Int64
 	queueDepth      atomic.Int64
@@ -135,6 +139,10 @@ func NewService(
 	return svc, nil
 }
 
+func (s *Service) SetTokenRotateHandler(handler TokenRotateHook) {
+	s.onTokenRotate = handler
+}
+
 func (s *Service) Run(ctx context.Context) error {
 	attempt := 0
 	for {
@@ -192,10 +200,13 @@ func (s *Service) TaskAccepted(ctx context.Context, taskID string, timestamp tim
 		"output_length", 0,
 		"output_truncated", false,
 	)
+	eventID, eventSeq := s.nextLifecycleEventMetadata()
 	err := s.enqueueCritical(ctx, taskAcceptedEvent{
 		Type:      EventTaskAccepted,
 		TaskID:    taskID,
 		Timestamp: formatTimestampUTCMillis(timestamp),
+		EventID:   eventID,
+		EventSeq:  eventSeq,
 	})
 	if err == nil {
 		s.lifecycleSent.Add(1)
@@ -212,10 +223,13 @@ func (s *Service) TaskStarted(ctx context.Context, taskID string, timestamp time
 		"output_length", 0,
 		"output_truncated", false,
 	)
+	eventID, eventSeq := s.nextLifecycleEventMetadata()
 	err := s.enqueueCritical(ctx, taskStartedEvent{
 		Type:      EventTaskStarted,
 		TaskID:    taskID,
 		Timestamp: formatTimestampUTCMillis(timestamp),
+		EventID:   eventID,
+		EventSeq:  eventSeq,
 	})
 	if err == nil {
 		s.lifecycleSent.Add(1)
@@ -232,12 +246,15 @@ func (s *Service) TaskLog(ctx context.Context, taskID, stream, line string, time
 		"output_length", 0,
 		"output_truncated", false,
 	)
+	eventID, eventSeq := s.nextLifecycleEventMetadata()
 	err := s.enqueueBestEffort(taskLogEvent{
 		Type:      EventTaskLog,
 		TaskID:    taskID,
 		Stream:    stream,
 		Line:      line,
 		Timestamp: formatTimestampUTCMillis(timestamp),
+		EventID:   eventID,
+		EventSeq:  eventSeq,
 	})
 	if err == nil {
 		s.lifecycleSent.Add(1)
@@ -259,6 +276,7 @@ func (s *Service) TaskCompleted(ctx context.Context, event api.CompleteTaskReque
 		"output_length", outputLength,
 	)
 
+	eventID, eventSeq := s.nextLifecycleEventMetadata()
 	err := s.enqueueCritical(ctx, taskCompletedEvent{
 		Type:       EventTaskComplete,
 		TaskID:     event.TaskID,
@@ -269,6 +287,8 @@ func (s *Service) TaskCompleted(ctx context.Context, event api.CompleteTaskReque
 		Error:      event.Error,
 		DurationMS: event.DurationMS,
 		Timestamp:  formatTimestampUTCMillis(event.CompletedAt),
+		EventID:    eventID,
+		EventSeq:   eventSeq,
 	})
 	if err == nil {
 		s.lifecycleSent.Add(1)
@@ -634,6 +654,27 @@ func (s *Service) connect(ctx context.Context) (*socketIOConn, error) {
 		s.logger.Warn("received realtime agent.error", "payload", payload)
 	})
 
+	socket.OnEvent(EventAgentTokenRotate, func(payload map[string]any) {
+		event := TokenRotateEvent{}
+		if bytes, err := json.Marshal(payload); err == nil {
+			_ = json.Unmarshal(bytes, &event)
+		}
+		if strings.TrimSpace(event.AgentToken) == "" {
+			s.logger.Warn("received token rotation event without token")
+			return
+		}
+		if s.onTokenRotate == nil {
+			s.logger.Warn("received token rotation event but no handler is configured")
+			return
+		}
+		if err := s.onTokenRotate(ctx, event); err != nil {
+			s.logger.Warn("failed to persist rotated agent token", "error", err)
+			return
+		}
+		nextNodeID, nextAgentToken := s.credentials()
+		socket.Emit(EventAgentAuth, s.authPayload(nextNodeID, nextAgentToken))
+	})
+
 	socket.OnConnectError(func(err any) {
 		s.logger.Warn("realtime namespace connect error", "error", err, "url", s.dialURL, "namespace", s.namespace, "path", s.path)
 		select {
@@ -938,6 +979,28 @@ func (s *Service) preflightCheck(ctx context.Context) error {
 		return fmt.Errorf("self-check failed: status=%d body=%q (expected Socket.IO handshake with sid)", resp.StatusCode, text)
 	}
 	return nil
+}
+
+func (s *Service) nextLifecycleEventMetadata() (string, int64) {
+	return newUUIDv4(), s.lifecycleSeq.Add(1)
+}
+
+func newUUIDv4() string {
+	var bytes [16]byte
+	if _, err := crand.Read(bytes[:]); err != nil {
+		now := time.Now().UnixNano()
+		return fmt.Sprintf("00000000-0000-4000-8000-%012x", now&0xffffffffffff)
+	}
+	bytes[6] = (bytes[6] & 0x0f) | 0x40
+	bytes[8] = (bytes[8] & 0x3f) | 0x80
+	return fmt.Sprintf(
+		"%08x-%04x-%04x-%04x-%012x",
+		bytes[0:4],
+		bytes[4:6],
+		bytes[6:8],
+		bytes[8:10],
+		bytes[10:16],
+	)
 }
 
 func classifyDialError(err error) error {

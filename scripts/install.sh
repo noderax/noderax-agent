@@ -25,6 +25,8 @@ SYMLINK_PATH="/usr/local/bin/noderax-agent"
 DOWNLOAD_BASE_URL="$(normalize_value "${NODERAX_AGENT_DOWNLOAD_BASE_URL:-https://cdn.noderax.net/noderax-agent/releases}")"
 AGENT_VERSION="$(normalize_value "${NODERAX_AGENT_VERSION:-latest}")"
 LOG_LEVEL="$(normalize_value "${NODERAX_AGENT_LOG_LEVEL:-info}")"
+RELEASE_MANIFEST_URL="$(normalize_value "${NODERAX_AGENT_RELEASE_MANIFEST_URL:-${DOWNLOAD_BASE_URL}/${AGENT_VERSION}/release-manifest.json}")"
+MINISIGN_PUBLIC_KEY="$(normalize_value "${NODERAX_AGENT_MINISIGN_PUBLIC_KEY:-}")"
 
 API_URL=""
 BOOTSTRAP_TOKEN=""
@@ -162,7 +164,7 @@ fi
 API_URL="$(normalize_api_origin "${API_URL}")"
 
 if [[ "${EUID}" -ne 0 ]]; then
-  echo "Run this installer as root. Example: curl -fsSL https://cdn.noderax.net/noderax-agent/install.sh | sudo bash -s -- --api-url ${API_URL} --bootstrap-token <token>" >&2
+  echo "Run this installer as root only after verifying install.sh against the signed release manifest." >&2
   exit 1
 fi
 
@@ -202,8 +204,17 @@ fi
 if ! command -v sudo >/dev/null 2>&1; then
   MISSING_PACKAGES+=("sudo")
 fi
+if ! command -v minisign >/dev/null 2>&1; then
+  MISSING_PACKAGES+=("minisign")
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+  MISSING_PACKAGES+=("python3")
+fi
 if ! dpkg -s ca-certificates >/dev/null 2>&1; then
   MISSING_PACKAGES+=("ca-certificates")
+fi
+if ! command -v sha256sum >/dev/null 2>&1; then
+  MISSING_PACKAGES+=("coreutils")
 fi
 
 if [[ "${#MISSING_PACKAGES[@]}" -gt 0 ]]; then
@@ -275,9 +286,61 @@ if [[ ! "${BINARY_URL}" =~ ^https?://[^[:space:]]+$ ]]; then
   exit 1
 fi
 
+if [[ -z "${MINISIGN_PUBLIC_KEY}" ]]; then
+  echo "NODERAX_AGENT_MINISIGN_PUBLIC_KEY is required to verify the release manifest." >&2
+  exit 1
+fi
+
+if [[ ! "${RELEASE_MANIFEST_URL}" =~ ^https?://[^[:space:]]+$ ]]; then
+  echo "NODERAX_AGENT_RELEASE_MANIFEST_URL is invalid: ${RELEASE_MANIFEST_URL}" >&2
+  exit 1
+fi
+
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 TMP_BINARY="${TMP_DIR}/noderax-agent"
+TMP_MANIFEST="${TMP_DIR}/release-manifest.json"
+TMP_MANIFEST_SIG="${TMP_DIR}/release-manifest.json.minisig"
+
+report_progress \
+  "manifest_verifying" \
+  55 \
+  "installing" \
+  "Downloading and verifying signed release manifest."
+
+curl -fsSL "${RELEASE_MANIFEST_URL}" -o "${TMP_MANIFEST}"
+curl -fsSL "${RELEASE_MANIFEST_URL}.minisig" -o "${TMP_MANIFEST_SIG}"
+minisign -Vm "${TMP_MANIFEST}" -P "${MINISIGN_PUBLIC_KEY}" >/dev/null
+
+mapfile -t MANIFEST_ARTIFACT < <(
+  python3 - "${TMP_MANIFEST}" "${ARCH}" <<'PY'
+import json
+import sys
+
+manifest_path, arch = sys.argv[1], sys.argv[2]
+with open(manifest_path, "r", encoding="utf-8") as handle:
+    manifest = json.load(handle)
+artifact = (manifest.get("artifacts") or {}).get(arch)
+if not artifact:
+    raise SystemExit(f"release manifest does not contain artifact for {arch}")
+print(artifact.get("binaryUrl") or "")
+print(artifact.get("sha256") or "")
+PY
+)
+MANIFEST_BINARY_URL="${MANIFEST_ARTIFACT[0]:-}"
+MANIFEST_BINARY_SHA256="${MANIFEST_ARTIFACT[1]:-}"
+
+if [[ -z "${MANIFEST_BINARY_URL}" || -z "${MANIFEST_BINARY_SHA256}" ]]; then
+  echo "Release manifest is missing binaryUrl or sha256 for linux-${ARCH}." >&2
+  exit 1
+fi
+
+if [[ "${BINARY_URL}" != "${MANIFEST_BINARY_URL}" ]]; then
+  echo "Refusing to install a binary URL that does not match the signed release manifest." >&2
+  echo "Requested: ${BINARY_URL}" >&2
+  echo "Manifest:  ${MANIFEST_BINARY_URL}" >&2
+  exit 1
+fi
 
 report_progress \
   "binary_download_started" \
@@ -287,6 +350,13 @@ report_progress \
 
 echo "Downloading Noderax Agent binary from ${BINARY_URL}"
 curl -fsSL "${BINARY_URL}" -o "${TMP_BINARY}"
+ACTUAL_BINARY_SHA256="$(sha256sum "${TMP_BINARY}" | awk '{print $1}')"
+if [[ "${ACTUAL_BINARY_SHA256}" != "${MANIFEST_BINARY_SHA256}" ]]; then
+  echo "Downloaded agent binary checksum mismatch." >&2
+  echo "Expected: ${MANIFEST_BINARY_SHA256}" >&2
+  echo "Actual:   ${ACTUAL_BINARY_SHA256}" >&2
+  exit 1
+fi
 chmod 0755 "${TMP_BINARY}"
 
 report_progress \

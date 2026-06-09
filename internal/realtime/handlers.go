@@ -14,6 +14,7 @@ const (
 	EventAgentAuthAck      = "agent.auth.ack"
 	EventAgentAuthErr      = "agent.auth.error"
 	EventAgentError        = "agent.error"
+	EventAgentTokenRotate  = "agent.token.rotate"
 	EventAgentPing         = "agent.ping"
 	EventAgentMetrics      = "agent.metrics"
 	EventRootAccessUpdated = "root-access.updated"
@@ -171,12 +172,16 @@ type taskAcceptedEvent struct {
 	Type      string `json:"type"`
 	TaskID    string `json:"taskId"`
 	Timestamp string `json:"timestamp"`
+	EventID   string `json:"eventId,omitempty"`
+	EventSeq  int64  `json:"eventSeq,omitempty"`
 }
 
 type taskStartedEvent struct {
 	Type      string `json:"type"`
 	TaskID    string `json:"taskId"`
 	Timestamp string `json:"timestamp"`
+	EventID   string `json:"eventId,omitempty"`
+	EventSeq  int64  `json:"eventSeq,omitempty"`
 }
 
 type taskLogEvent struct {
@@ -185,6 +190,8 @@ type taskLogEvent struct {
 	Stream    string `json:"stream"`
 	Line      string `json:"line"`
 	Timestamp string `json:"timestamp"`
+	EventID   string `json:"eventId,omitempty"`
+	EventSeq  int64  `json:"eventSeq,omitempty"`
 }
 
 type taskCompletedEvent struct {
@@ -197,6 +204,8 @@ type taskCompletedEvent struct {
 	Error      string `json:"error,omitempty"`
 	DurationMS int64  `json:"durationMs"`
 	Timestamp  string `json:"timestamp"`
+	EventID    string `json:"eventId,omitempty"`
+	EventSeq   int64  `json:"eventSeq,omitempty"`
 }
 
 type authAckEvent struct {
@@ -215,6 +224,12 @@ type rootAccessUpdatedEvent struct {
 type authErrorEvent struct {
 	Message string `json:"message,omitempty"`
 	Error   string `json:"error,omitempty"`
+}
+
+type TokenRotateEvent struct {
+	Type       string `json:"type"`
+	AgentToken string `json:"agentToken"`
+	ExpiresAt  string `json:"expiresAt,omitempty"`
 }
 
 type terminalStartEvent struct {

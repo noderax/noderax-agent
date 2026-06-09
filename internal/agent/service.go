@@ -137,6 +137,7 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 	)
 
 	commandHandler := &realtimeCommandHandler{tasks: taskService}
+	identityStore := NewIdentityStore(cfg.StateFile)
 	realtimeService, err := realtime.NewService(
 		cfg.APIURL,
 		cfg.RealtimeNamespace,
@@ -158,6 +159,21 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		logger.Error("failed to initialize realtime service", "error", err)
 	}
 	if realtimeService != nil {
+		realtimeService.SetTokenRotateHandler(func(ctx context.Context, event realtime.TokenRotateEvent) error {
+			nextIdentity := identity.Current()
+			nextIdentity.AgentToken = strings.TrimSpace(event.AgentToken)
+			if !nextIdentity.Ready() {
+				return fmt.Errorf("rotated agent token payload is incomplete")
+			}
+			if err := persistIdentity(cfg, identityStore, nextIdentity, logger); err != nil {
+				return err
+			}
+			identity.Set(nextIdentity)
+			client.SetAgentToken(nextIdentity.AgentToken)
+			client.SetAgentNodeID(nextIdentity.NodeID)
+			logger.Info("agent token rotated and persisted", "node_id", nextIdentity.NodeID, "expires_at", event.ExpiresAt)
+			return nil
+		})
 		realtimeService.SetRuntimeAgentVersion(version)
 		setRealtimeNodeLocation(context.Background(), cfg, logger, realtimeService, false)
 		hostInfo, hostInfoErr := system.HostInfo(context.Background())
@@ -184,7 +200,7 @@ func NewService(cfg config.Config, client *api.Client, logger *slog.Logger, vers
 		logger:   logger,
 		version:  version,
 		identity: identity,
-		store:    NewIdentityStore(cfg.StateFile),
+		store:    identityStore,
 		metrics:  metricsService,
 		root:     rootManager,
 		tasks:    taskService,

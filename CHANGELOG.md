@@ -15,6 +15,18 @@ Formatting rules:
 
 ## [Unreleased]
 
+## [2026.6.3] - 2026-06-10
+
+### Added
+
+- Added signed release manifests for installer and binary checksum verification, including minisign signatures in the agent release workflow.
+- Added realtime agent token rotation handling so an online agent can persist a staged token and reauthenticate without manual re-enrollment.
+- Added lifecycle event IDs and monotonic sequence numbers to task realtime events for server-side replay protection.
+
+### Security
+
+- Removed pipe-to-root installer guidance and made installer execution depend on a verified signed manifest plus SHA-256 binary checks.
+
 ## [2026.5.3] - 2026-05-14
 
 ### Added

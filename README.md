@@ -41,7 +41,24 @@ The preferred onboarding path is from the web dashboard:
 4. Copy the generated install command from step 2.
 
 ```bash
-curl -fsSL https://cdn.noderax.net/noderax-agent/install.sh | sudo bash -s -- --api-url https://api.example.com --bootstrap-token <token>
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+manifest_url="https://cdn.noderax.net/noderax-agent/releases/latest/release-manifest.json"
+minisign_pubkey="<pinned minisign public key>"
+
+curl -fsSLo "$tmp/install.sh" "https://cdn.noderax.net/noderax-agent/install.sh"
+curl -fsSLo "$tmp/release-manifest.json" "$manifest_url"
+curl -fsSLo "$tmp/release-manifest.json.minisig" "$manifest_url.minisig"
+minisign -Vm "$tmp/release-manifest.json" -P "$minisign_pubkey"
+
+expected_sha256="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["installer"]["sha256"])' "$tmp/release-manifest.json")"
+actual_sha256="$(sha256sum "$tmp/install.sh" | awk '{print $1}')"
+test "$expected_sha256" = "$actual_sha256"
+
+sudo env \
+  NODERAX_AGENT_RELEASE_MANIFEST_URL="$manifest_url" \
+  NODERAX_AGENT_MINISIGN_PUBLIC_KEY="$minisign_pubkey" \
+  bash "$tmp/install.sh" --api-url https://api.example.com --bootstrap-token <token>
 ```
 
 The installer:
@@ -83,10 +100,14 @@ Expected R2 object layout:
 - `noderax-agent/releases/latest/noderax-agent-linux-amd64`
 - `noderax-agent/releases/latest/noderax-agent-linux-arm64`
 - `noderax-agent/releases/latest/SHA256SUMS`
+- `noderax-agent/releases/latest/release-manifest.json`
+- `noderax-agent/releases/latest/release-manifest.json.minisig`
 - `noderax-agent/releases/<version>/noderax-agent-linux-amd64`
 - `noderax-agent/releases/<version>/noderax-agent-linux-arm64`
 - `noderax-agent/releases/<version>/SHA256SUMS`
+- `noderax-agent/releases/<version>/install.sh`
 - `noderax-agent/releases/<version>/release-manifest.json`
+- `noderax-agent/releases/<version>/release-manifest.json.minisig`
 
 Required GitHub secrets:
 
@@ -94,6 +115,7 @@ Required GitHub secrets:
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
 - `R2_BUCKET`
+- `AGENT_MINISIGN_SECRET_KEY_B64`
 
 `R2_BUCKET` must be the plain bucket name only. Do not use a URL or custom domain.
 

@@ -62,6 +62,26 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Install release signing tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
+      - name: Prepare minisign secret key
+        id: minisign
+        shell: bash
+        env:
+          AGENT_MINISIGN_SECRET_KEY_B64: ${{ secrets.AGENT_MINISIGN_SECRET_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          : "${AGENT_MINISIGN_SECRET_KEY_B64:?Missing AGENT_MINISIGN_SECRET_KEY_B64 secret}"
+          key_path="${RUNNER_TEMP}/noderax-agent-minisign.key"
+          umask 077
+          printf '%s' "${AGENT_MINISIGN_SECRET_KEY_B64}" | base64 -d > "${key_path}"
+          echo "key_path=${key_path}" >> "${GITHUB_OUTPUT}"
+
       - name: Resolve release metadata
         id: release
         shell: bash
@@ -114,11 +134,18 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x ./scripts/build-release.sh
-          ./scripts/build-release.sh \
-            --version "${{ steps.release.outputs.binary_version }}" \
-            --commit "${GITHUB_SHA}" \
-            --build-date "${{ steps.release.outputs.build_date }}" \
+          build_args=(
+            --version "${{ steps.release.outputs.binary_version }}"
+            --commit "${GITHUB_SHA}"
+            --build-date "${{ steps.release.outputs.build_date }}"
             --output-dir "./dist/release"
+            --release-base-url "${PUBLIC_RELEASE_BASE_URL}"
+            --minisign-secret-key-file "${{ steps.minisign.outputs.key_path }}"
+          )
+          if [[ "${{ steps.release.outputs.release_version }}" == "" ]]; then
+            build_args+=(--release-artifact-channel "latest")
+          fi
+          ./scripts/build-release.sh "${build_args[@]}"
 
       - name: Generate tagged release metadata
         if: steps.release.outputs.release_version != ''
@@ -149,6 +176,14 @@ jobs:
             --manifest "./dist/release/release-manifest.json" \
             --existing "./dist/release/catalog-existing.json" \
             --output "./dist/release/catalog.json"
+
+      - name: Sign release manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          minisign -Sm "./dist/release/release-manifest.json" \
+            -s "${{ steps.minisign.outputs.key_path }}" \
+            -x "./dist/release/release-manifest.json.minisig"
 
       - name: Show release assets
         run: ls -lah ./dist/release
@@ -249,6 +284,16 @@ jobs:
             --cache-control "public, max-age=300" \
             --content-type "text/plain; charset=utf-8"
 
+          aws s3 cp ./dist/release/release-manifest.json "${bucket}/noderax-agent/releases/latest/release-manifest.json" \
+            --endpoint-url "${endpoint}" \
+            --cache-control "public, max-age=300" \
+            --content-type "application/json; charset=utf-8"
+
+          aws s3 cp ./dist/release/release-manifest.json.minisig "${bucket}/noderax-agent/releases/latest/release-manifest.json.minisig" \
+            --endpoint-url "${endpoint}" \
+            --cache-control "public, max-age=300" \
+            --content-type "application/octet-stream"
+
       - name: Publish versioned release and catalog
         if: steps.release.outputs.release_version != ''
         shell: bash
@@ -273,10 +318,20 @@ jobs:
             --cache-control "public, max-age=31536000, immutable" \
             --content-type "text/plain; charset=utf-8"
 
+          aws s3 cp ./dist/release/install.sh "${bucket}/noderax-agent/releases/${version}/install.sh" \
+            --endpoint-url "${endpoint}" \
+            --cache-control "public, max-age=31536000, immutable" \
+            --content-type "text/x-shellscript; charset=utf-8"
+
           aws s3 cp ./dist/release/release-manifest.json "${bucket}/noderax-agent/releases/${version}/release-manifest.json" \
             --endpoint-url "${endpoint}" \
             --cache-control "public, max-age=31536000, immutable" \
             --content-type "application/json; charset=utf-8"
+
+          aws s3 cp ./dist/release/release-manifest.json.minisig "${bucket}/noderax-agent/releases/${version}/release-manifest.json.minisig" \
+            --endpoint-url "${endpoint}" \
+            --cache-control "public, max-age=31536000, immutable" \
+            --content-type "application/octet-stream"
 
           aws s3 cp ./dist/release/catalog.json "${bucket}/noderax-agent/releases/catalog.json" \
             --endpoint-url "${endpoint}" \
@@ -295,4 +350,6 @@ jobs:
             ./dist/release/noderax-agent-linux-amd64
             ./dist/release/noderax-agent-linux-arm64
             ./dist/release/SHA256SUMS
+            ./dist/release/install.sh
             ./dist/release/release-manifest.json
+            ./dist/release/release-manifest.json.minisig
