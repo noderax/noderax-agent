@@ -15,6 +15,13 @@ Formatting rules:
 
 ## [Unreleased]
 
+## [2026.6.4] - 2026-06-10
+
+### Fixed
+
+- Increased the default API request timeout so HTTP task long-polling can wait longer than the task poll interval.
+- Automatically extends legacy configs where `request_timeout` is shorter than or equal to `task_poll_interval`, preventing agent update tasks from timing out in queue before the agent can claim them.
+
 ## [2026.6.3] - 2026-06-10
 
 ### Added

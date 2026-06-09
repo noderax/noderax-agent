@@ -16,7 +16,7 @@ const (
 	defaultHeartbeatInterval = 30 * time.Second
 	defaultMetricsInterval   = 2 * time.Second
 	defaultTaskPollInterval  = 15 * time.Second
-	defaultRequestTimeout    = 10 * time.Second
+	defaultRequestTimeout    = 30 * time.Second
 	defaultTaskTimeout       = 10 * time.Minute
 	defaultShutdownTimeout   = 20 * time.Second
 	defaultRealtimePing      = 2 * time.Second
@@ -280,6 +280,9 @@ func (c *Config) normalize() {
 	c.LocationManualRegion = strings.TrimSpace(c.LocationManualRegion)
 	c.LocationManualZone = strings.TrimSpace(c.LocationManualZone)
 	c.IPInfoToken = strings.TrimSpace(c.IPInfoToken)
+	if c.TaskPollInterval > 0 && c.RequestTimeout <= c.TaskPollInterval {
+		c.RequestTimeout = c.TaskPollInterval + 10*time.Second
+	}
 }
 
 func detectConfigFile() string {

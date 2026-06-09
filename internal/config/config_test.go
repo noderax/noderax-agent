@@ -39,6 +39,13 @@ func TestDefaultLowLatencyRealtimeSettings(t *testing.T) {
 	t.Parallel()
 
 	cfg := Default()
+	if cfg.RequestTimeout <= cfg.TaskPollInterval {
+		t.Fatalf(
+			"request timeout must exceed task poll interval: request_timeout=%s task_poll_interval=%s",
+			cfg.RequestTimeout,
+			cfg.TaskPollInterval,
+		)
+	}
 	if cfg.RealtimePingInterval != 2*time.Second {
 		t.Fatalf("unexpected realtime ping default: got=%s want=2s", cfg.RealtimePingInterval)
 	}
@@ -122,6 +129,24 @@ func TestLoadLocationConfigFromEnv(t *testing.T) {
 	}
 	if cfg.IPInfoToken != "token-123" {
 		t.Fatalf("ipinfo token = %q, want token-123", cfg.IPInfoToken)
+	}
+}
+
+func TestNormalizeExtendsRequestTimeoutForTaskLongPolling(t *testing.T) {
+	t.Parallel()
+
+	cfg := Default()
+	cfg.APIURL = "https://api.example.com"
+	cfg.TaskPollInterval = 15 * time.Second
+	cfg.RequestTimeout = 10 * time.Second
+
+	cfg.normalize()
+
+	if cfg.RequestTimeout != 25*time.Second {
+		t.Fatalf("request timeout = %s, want 25s", cfg.RequestTimeout)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }
 
