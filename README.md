@@ -454,3 +454,7 @@ cp config.example.json config.json
 - API-side realtime task push is not the default control path; HTTP claiming should be considered the normal operating mode.
 - Interactive terminals are the main exception: they depend on the agent realtime socket being healthy.
 - When a node is put into maintenance mode from the control plane, the API stops assigning new work to that node while in-flight tasks are allowed to finish.
+
+## Dependency updates (2026-09-05)
+
+The release workflow reads its Go version from go.mod. Socket.IO v0.1.0 requires the existing webtransport-go v0.8.0 / quic-go v0.45.2 / qpack v0.4.0 APIs; upgrading that transport stack independently fails compilation. Other runtime modules were updated and checked with go test ./..., go vet ./..., and Linux amd64/arm64 builds.

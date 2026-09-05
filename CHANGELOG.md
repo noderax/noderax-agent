@@ -15,6 +15,13 @@ Formatting rules:
 
 ## [Unreleased]
 
+## [2026.9.1] - 2026-09-05
+
+### Changed
+
+- Updated host telemetry and networking dependencies while preserving compatibility with the agent Socket.IO transport.
+- Aligned release builds with the Go version declared in go.mod and verified Linux amd64 and arm64 builds.
+
 ## [2026.6.4] - 2026-06-10
 
 ### Fixed
